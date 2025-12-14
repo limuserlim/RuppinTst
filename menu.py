@@ -420,7 +420,7 @@ HOURS_RANGE = range(8, 22)  # טווח שעות בדיקה (08:00 עד 21:00)
 
 def clean_text(text):
 
-    """ניקוי רווחים כפולים ושטחים ריקים"""
+    
 
     if pd.isna(text) or str(text).strip() == "":
 
@@ -434,7 +434,7 @@ def clean_text(text):
 
 def parse_availability_string(avail_str):
 
-    """מפענח מחרוזת כמו '16-17, 17-18' לרשימת שעות"""
+    
 
     slots = set()
 
@@ -607,3 +607,4 @@ if action == "בנה לי מערכת (LOOZ)":
 # === לוגיקה של שאלונים ===
 elif action == "בנה לי שאלון":
     quest.run()
+
