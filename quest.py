@@ -30,44 +30,32 @@ def get_creds():
         return None
     
     creds_dict = dict(st.secrets["gcp_service_account"])
-    # תיקון למפתח פרטי
     if "private_key" in creds_dict:
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
     return service_account.Credentials.from_service_account_info(
         creds_dict,
-        scopes=[
-            "https://www.googleapis.com/auth/forms.body" 
-            # הסרנו את ההרשאות לדרייב ואקסל כי הרובוט חסום לאחסון
-        ]
+        scopes=["https://www.googleapis.com/auth/forms.body"]
     )
 
 def update_form_structure(year, semesters):
-    """
-    עדכון מבנה הטופס בלבד (ללא יצירת קבצים)
-    """
     creds = get_creds()
     if not creds: raise Exception("חיבור לגוגל נכשל")
     service = build('forms', 'v1', credentials=creds)
 
-    st.info("⚙️ מתחיל בעדכון מבנה הטופס (מחיקת שאלות ישנות ויצירת חדשות)...")
-
-    # שלב א': שליפת הטופס הקיים
-    form_metadata = service.forms().get(formId=FORM_ID).execute()
+    st.info("⚙️ מתחיל בעדכון מבנה הטופס...")
     
-    # שלב ב': מחיקת כל השאלות הישנות
+    form_metadata = service.forms().get(formId=FORM_ID).execute()
     delete_requests = []
     if 'items' in form_metadata:
-        # מוחקים מהסוף להתחלה או לפי אינדקס 0 בלולאה כדי למנוע בעיות הזזה
         for i in range(len(form_metadata['items'])):
              delete_requests.append({"deleteItem": {"location": {"index": 0}}})
     
     if delete_requests:
         service.forms().batchUpdate(formId=FORM_ID, body={"requests": delete_requests}).execute()
 
-    # שלב ג': בניית הטופס החדש
     create_requests = []
-
+    
     # 1. עדכון כותרת
     create_requests.append({
         "updateFormInfo": {
@@ -79,7 +67,7 @@ def update_form_structure(year, semesters):
         }
     })
 
-    # 2. הוספת שם מלא
+    # 2. שם מלא
     create_requests.append({
         "createItem": {
             "item": {
@@ -95,13 +83,9 @@ def update_form_structure(year, semesters):
         }
     })
 
-    # 3. יצירת גריד שעות לכל סמסטר
+    # 3. גריד שעות
     days = ["יום ראשון", "יום שני", "יום שלישי", "יום רביעי", "יום חמישי"]
-    hours = [
-        "08:00-09:00", "09:00-10:00", "10:00-11:00", "11:00-12:00",
-        "12:00-13:00", "13:00-14:00", "14:00-15:00", "15:00-16:00",
-        "16:00-17:00", "17:00-18:00", "18:00-19:00", "19:00-20:00"
-    ]
+    hours = ["08:00-09:00", "09:00-10:00", "10:00-11:00", "11:00-12:00", "12:00-13:00", "13:00-14:00", "14:00-15:00", "15:00-16:00", "16:00-17:00", "17:00-18:00", "18:00-19:00", "19:00-20:00"]
 
     current_index = 1
     for sem in semesters:
@@ -128,56 +112,42 @@ def update_form_structure(year, semesters):
         })
         current_index += 1
 
-    # שליחת כל הבקשות בבת אחת
     service.forms().batchUpdate(formId=FORM_ID, body={"requests": create_requests}).execute()
     return True
 
-# --- ממשק משתמש ---
-st.set_page_config(page_title="בדיקת quest.py", page_icon="📝", layout="centered")
-st.title("📝 מחולל השאלונים")
-st.caption("הרובוט יעדכן את השאלות בטופס. את האקסל יש ליצור ידנית.")
-
-st.info(f"מחובר לטופס: `{FORM_ID}`")
-
-with st.form("test_form"):
-    col1, col2 = st.columns(2)
-    with col1:
-        year_input = st.text_input("שנה", value="2026")
-    with col2:
-        semesters_input = st.text_input("סמסטרים", value="1,2")
+# --- הפונקציה הראשית שתופעל ע"י התפריט ---
+def run():
+    st.header("📝 מחולל השאלונים")
+    st.caption("רכיב זה מעדכן את מבנה שאלון הזמינות למרצים.")
     
-    submitted = st.form_submit_button("הרץ עדכון טופס 🚀")
+    st.info(f"מחובר לטופס: `{FORM_ID}`")
 
-if submitted:
-    # בדיקות תקינות
-    is_year_valid, year_msg = validate_year(year_input)
-    if not is_year_valid:
-        st.error(year_msg)
-        st.stop()
+    with st.form("quest_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            year_input = st.text_input("שנה", value="2026")
+        with col2:
+            semesters_input = st.text_input("סמסטרים", value="1,2")
         
-    is_sem_valid, clean_semesters = validate_semesters(semesters_input)
-    if not is_sem_valid:
-        st.error("שגיאה בסמסטרים")
-        st.stop()
+        submitted = st.form_submit_button("עדכן טופס 🚀")
 
-    # ביצוע
-    with st.spinner("הרובוט בונה את הטופס..."):
-        try:
-            # אנחנו מריצים רק את עדכון המבנה
-            update_form_structure(year_input, clean_semesters)
+    if submitted:
+        is_year_valid, year_msg = validate_year(year_input)
+        if not is_year_valid:
+            st.error(year_msg)
+            return
             
-            st.success("✅ הטופס עודכן בהצלחה!")
-            st.balloons()
-            
-            st.markdown("---")
-            st.markdown("### 🛑 מה עכשיו? (חיבור לאקסל)")
-            st.markdown("מכיוון שהרובוט חסום ליצירת קבצים, עשי זאת ידנית:")
-            st.markdown(f"1. **[לחצי כאן לפתיחת הטופס]({f'https://docs.google.com/forms/d/{FORM_ID}/edit'})**")
-            st.markdown("2. עברי ללשונית **Responses** (תגובות).")
-            st.markdown("3. לחצי על **Link to Sheets**.")
-            st.markdown("4. בחרי **Create a new spreadsheet** ולחצי Create.")
-            st.info("זהו! הטופס מוכן ומחובר.")
+        is_sem_valid, clean_semesters = validate_semesters(semesters_input)
+        if not is_sem_valid:
+            st.error("שגיאה בסמסטרים")
+            return
 
-        except Exception as e:
-            st.error("❌ אירעה שגיאה:")
-            st.code(traceback.format_exc())
+        with st.spinner("מעדכן את הטופס..."):
+            try:
+                update_form_structure(year_input, clean_semesters)
+                st.success("✅ הטופס עודכן בהצלחה!")
+                st.markdown(f"[לחצי כאן לפתיחת הטופס]({f'https://docs.google.com/forms/d/{FORM_ID}/edit'})")
+                st.info("זכרי: יש לחבר את האקסל ידנית דרך לשונית Responses בטופס.")
+            except Exception as e:
+                st.error("❌ שגיאה בעדכון הטופס:")
+                st.code(traceback.format_exc())
