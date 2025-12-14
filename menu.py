@@ -540,7 +540,7 @@ def configure_gemini():
     ]
     
     model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
+        model_name="models/gemini-flash-latest",
         system_instruction=LOOZ_INSTRUCTIONS,
         safety_settings=safety_settings
     )
@@ -654,4 +654,5 @@ elif action == "בנה לי שאלון":
             st.rerun()
             
     quest.run()
+
 
