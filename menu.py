@@ -1,12 +1,12 @@
 import streamlit as st
 import google.generativeai as genai
 import quest  # הקובץ השני
-from google.api_core import exceptions
 
 # --- הגדרת העמוד ---
 st.set_page_config(page_title="מערכת ניהול רופין", page_icon="🎓", layout="centered")
 
 # --- הגדרת המוח של LOOZ ---
+# כאן את מדביקה את ההנחיות המדויקות שנתת ל-LOOZ המקורי
 LOOZ_INSTRUCTIONS = """
 1.    אלגו
 
@@ -420,7 +420,7 @@ HOURS_RANGE = range(8, 22)  # טווח שעות בדיקה (08:00 עד 21:00)
 
 def clean_text(text):
 
-   
+    """ניקוי רווחים כפולים ושטחים ריקים"""
 
     if pd.isna(text) or str(text).strip() == "":
 
@@ -434,7 +434,7 @@ def clean_text(text):
 
 def parse_availability_string(avail_str):
 
-   
+    """מפענח מחרוזת כמו '16-17, 17-18' לרשימת שעות"""
 
     slots = set()
 
@@ -522,36 +522,55 @@ def load_and_clean_data():
 
         if col in df_courses.columns:
 
-            df"""
+            df
+"""
 
 def configure_gemini():
+    # שליפת המפתח מהסודות
     if "GOOGLE_API_KEY" not in st.secrets:
         st.error("חסר מפתח GOOGLE_API_KEY בקובץ הסודות.")
         return None
     
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
     
-    # הגדרות בטיחות (כדי למנוע חסימת תשובות שווא)
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
-    
+    # הגדרת המודל (המוח)
     model = genai.GenerativeModel(
         model_name="models/gemini-flash-latest",
-        system_instruction=LOOZ_INSTRUCTIONS,
-        safety_settings=safety_settings
+        system_instruction=LOOZ_INSTRUCTIONS
     )
     return model
 
+def process_files_with_looz(uploaded_files, user_prompt):
+    model = configure_gemini()
+    if not model: return
+
+    # הכנת הקבצים לשליחה
+    content_parts = []
+    
+    # 1. הוספת בקשת המשתמש
+    content_parts.append(user_prompt)
+    
+    # 2. המרת הקבצים לפורמט שג'מיני מבין
+    for file in uploaded_files:
+        # קריאת הקובץ
+        file_data = file.getvalue()
+        mime_type = file.type
+        
+        # יצירת אובייקט מידע
+        content_parts.append({
+            "mime_type": mime_type,
+            "data": file_data
+        })
+
+    # שליחה לבוט וקבלת תשובה
+    try:
+        response = model.generate_content(content_parts)
+        return response.text
+    except Exception as e:
+        return f"שגיאה בעיבוד מול ג'מיני: {str(e)}"
+
 # --- ממשק המשתמש ---
 st.title("🎓 מערכת ניהול מערכת שעות")
-
-# אתחול זיכרון השיחה אם לא קיים
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
 action = st.radio(
     "בחר פעולה:",
@@ -561,98 +580,30 @@ action = st.radio(
 
 st.markdown("---")
 
-# === לוגיקה של LOOZ (צ'אט) ===
+# === לוגיקה של LOOZ ===
 if action == "בנה לי מערכת (LOOZ)":
     st.header("🤖 הבוט LOOZ - בניית מערכת")
+    st.write("אנא טעני את קבצי האילוצים והקורסים (PDF, תמונות, אקסל).")
     
-    # שלב 1: העלאת קבצים (מוצג רק אם עוד לא התחלנו שיחה או שרוצים להתחיל מחדש)
-    with st.expander("📂 טעינת קבצים והגדרות", expanded=(len(st.session_state.messages) == 0)):
-        uploaded_files = st.file_uploader(
-            "קבצי קלט (PDF, Excel, תמונות)", 
-            accept_multiple_files=True,
-            type=['pdf', 'csv', 'txt', 'png', 'jpg', 'xlsx']
-        )
-        user_notes = st.text_area("הערות ראשוניות:", "בנה לי מערכת שעות בהתבסס על הקבצים.")
-        
-        start_btn = st.button("התחל עיבוד ובניית מערכת 🚀", type="primary")
+    uploaded_files = st.file_uploader(
+        "קבצי קלט למערכת", 
+        accept_multiple_files=True,
+        type=['pdf', 'csv', 'txt', 'png', 'jpg', 'xlsx']
+    )
+    
+    # תיבת טקסט להוראות נוספות
+    user_notes = st.text_area("הערות נוספות לבוט:", "בנה לי מערכת שעות בהתבסס על הקבצים.")
 
-    # שלב 2: אתחול השיחה בעת לחיצה
-    if start_btn and uploaded_files:
-        model = configure_gemini()
-        if model:
-            # הכנת ההודעה הראשונה (טקסט + קבצים)
-            content_parts = [user_notes]
-            for file in uploaded_files:
-                content_parts.append({
-                    "mime_type": file.type,
-                    "data": file.getvalue()
-                })
-            
-            # שמירת ההודעה הראשונה של המשתמש בזיכרון
-            st.session_state.messages = [
-                {"role": "user", "parts": content_parts, "display_text": user_notes} 
-                # display_text נועד להציג למשתמש רק את הטקסט בלי ה"בלגן" של הקבצים
-            ]
-            
-            # קבלת תשובה ראשונה מהבוט
-            with st.spinner("LOOZ מנתח את הקבצים ובונה את המערכת... (זה עשוי לקחת רגע)"):
-                try:
-                    response = model.generate_content(content_parts)
-                    st.session_state.messages.append({"role": "model", "parts": [response.text]})
-                except Exception as e:
-                    st.error(f"שגיאה: {str(e)}")
-
-    # שלב 3: הצגת היסטוריית הצ'אט
-    for msg in st.session_state.messages:
-        role = "user" if msg["role"] == "user" else "assistant"
-        with st.chat_message(role):
-            # אם זו הודעת משתמש עם קבצים, נציג רק את הטקסט
-            if "display_text" in msg:
-                st.write(msg["display_text"])
-                if role == "user": 
-                    st.caption("📎 (קבצים מצורפים)")
-            else:
-                # הודעה רגילה
-                st.write(msg["parts"][0])
-
-    # שלב 4: תיבת צ'אט להמשך שיחה
-    if prompt := st.chat_input("כתוב תגובה ל-LOOZ... (למשל: 'שנה את יום שלישי')"):
-        if not st.session_state.messages:
-            st.warning("יש לטעון קבצים ולהתחיל את השיחה קודם.")
+    if st.button("הפעל את LOOZ 🧠", type="primary"):
+        if not uploaded_files:
+            st.warning("נא להעלות קבצים לפני ההפעלה.")
         else:
-            # הוספת הודעת המשתמש החדשה לזיכרון
-            st.session_state.messages.append({"role": "user", "parts": [prompt]})
-            with st.chat_message("user"):
-                st.write(prompt)
-
-            # שליחת כל ההיסטוריה לג'מיני (כדי שיזכור את הקבצים מההתחלה)
-            model = configure_gemini()
-            if model:
-                history_for_gemini = []
-                for msg in st.session_state.messages:
-                    history_for_gemini.append({
-                        "role": msg["role"],
-                        "parts": msg["parts"]
-                    })
-                
-                with st.chat_message("assistant"):
-                    with st.spinner("חושב..."):
-                        try:
-                            response = model.generate_content(history_for_gemini)
-                            st.write(response.text)
-                            # שמירת התשובה בזיכרון
-                            st.session_state.messages.append({"role": "model", "parts": [response.text]})
-                        except Exception as e:
-                            st.error(f"שגיאה: {e}")
+            with st.spinner("LOOZ מנתח את הקבצים ובונה מערכת..."):
+                result = process_files_with_looz(uploaded_files, user_notes)
+                st.success("העיבוד הסתיים!")
+                st.markdown("### 📋 המלצת המערכת:")
+                st.write(result)
 
 # === לוגיקה של שאלונים ===
 elif action == "בנה לי שאלון":
-    # ניקוי הצ'אט אם עוברים מסך, כדי שלא יפריע
-    if "messages" in st.session_state and st.session_state.messages:
-        if st.button("נקה היסטוריית צ'אט"):
-            st.session_state.messages = []
-            st.rerun()
-            
     quest.run()
-
-
