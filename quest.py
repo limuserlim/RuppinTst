@@ -26,81 +26,49 @@ def validate_semesters(semesters_str):
 # --- פונקציות גוגל ---
 def get_creds():
     if "gcp_service_account" not in st.secrets:
-        st.error("לא נמצא קובץ secrets.toml")
+        st.error("לא נמצאו סודות (Secrets).")
         return None
     
     creds_dict = dict(st.secrets["gcp_service_account"])
-    
+    # תיקון למפתח פרטי
     if "private_key" in creds_dict:
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
     return service_account.Credentials.from_service_account_info(
         creds_dict,
         scopes=[
-            "https://www.googleapis.com/auth/forms.body", 
-            "https://www.googleapis.com/auth/drive",
-            "https://www.googleapis.com/auth/spreadsheets"
+            "https://www.googleapis.com/auth/forms.body" 
+            # הסרנו את ההרשאות לדרייב ואקסל כי הרובוט חסום לאחסון
         ]
     )
 
-def manage_response_sheet(year, semesters):
-    creds = get_creds()
-    if not creds: return None, None
-    
-    drive_service = build('drive', 'v3', credentials=creds)
-
-    sem_str = "".join(semesters)
-    file_name = f"Arch{year}{sem_str}"
-    
-    st.info(f"⚙️ מטפל בקובץ התשובות: `{file_name}`...")
-
-    try:
-        query = f"name = '{file_name}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
-        results = drive_service.files().list(q=query, fields="files(id, name)").execute()
-        existing_files = results.get('files', [])
-
-        if existing_files:
-            for f in existing_files:
-                drive_service.files().delete(fileId=f['id']).execute()
-                st.caption(f"🗑️ נמחק קובץ ישן: {f['name']}")
-    except Exception as e:
-        st.warning(f"הערה: לא הצלחתי לבדוק אם קיים קובץ ישן ({e}), ממשיך ליצירת חדש.")
-
-    file_metadata = {
-        'name': file_name,
-        'mimeType': 'application/vnd.google-apps.spreadsheet'
-    }
-    
-    file = drive_service.files().create(body=file_metadata, fields='id, webViewLink').execute()
-    new_id = file.get('id')
-    new_url = file.get('webViewLink')
-
-    try:
-        drive_service.permissions().create(
-            fileId=new_id,
-            body={'type': 'anyone', 'role': 'writer'}
-        ).execute()
-    except:
-        pass
-
-    return new_url, file_name
-
 def update_form_structure(year, semesters):
+    """
+    עדכון מבנה הטופס בלבד (ללא יצירת קבצים)
+    """
     creds = get_creds()
     if not creds: raise Exception("חיבור לגוגל נכשל")
     service = build('forms', 'v1', credentials=creds)
 
+    st.info("⚙️ מתחיל בעדכון מבנה הטופס (מחיקת שאלות ישנות ויצירת חדשות)...")
+
+    # שלב א': שליפת הטופס הקיים
     form_metadata = service.forms().get(formId=FORM_ID).execute()
+    
+    # שלב ב': מחיקת כל השאלות הישנות
     delete_requests = []
     if 'items' in form_metadata:
-        for item in form_metadata['items']:
-            delete_requests.append({"deleteItem": {"location": {"index": 0}}})
+        # מוחקים מהסוף להתחלה או לפי אינדקס 0 בלולאה כדי למנוע בעיות הזזה
+        for i in range(len(form_metadata['items'])):
+             delete_requests.append({"deleteItem": {"location": {"index": 0}}})
     
     if delete_requests:
         service.forms().batchUpdate(formId=FORM_ID, body={"requests": delete_requests}).execute()
 
+    # שלב ג': בניית הטופס החדש
     create_requests = []
 
+    # 1. עדכון כותרת
     create_requests.append({
         "updateFormInfo": {
             "info": {
@@ -111,6 +79,7 @@ def update_form_structure(year, semesters):
         }
     })
 
+    # 2. הוספת שם מלא
     create_requests.append({
         "createItem": {
             "item": {
@@ -126,6 +95,7 @@ def update_form_structure(year, semesters):
         }
     })
 
+    # 3. יצירת גריד שעות לכל סמסטר
     days = ["יום ראשון", "יום שני", "יום שלישי", "יום רביעי", "יום חמישי"]
     hours = [
         "08:00-09:00", "09:00-10:00", "10:00-11:00", "11:00-12:00",
@@ -158,14 +128,14 @@ def update_form_structure(year, semesters):
         })
         current_index += 1
 
+    # שליחת כל הבקשות בבת אחת
     service.forms().batchUpdate(formId=FORM_ID, body={"requests": create_requests}).execute()
     return True
 
-# --- ממשק המשתמש ---
-st.set_page_config(page_title="בדיקת quest.py", page_icon="🧪", layout="centered")
-
-st.title("🧪 בדיקת רכיב השאלונים")
-st.write("כלי זה מבודד את הלוגיקה של בניית הטופס והאקסל כדי לוודא שהכל תקין.")
+# --- ממשק משתמש ---
+st.set_page_config(page_title="בדיקת quest.py", page_icon="📝", layout="centered")
+st.title("📝 מחולל השאלונים")
+st.caption("הרובוט יעדכן את השאלות בטופס. את האקסל יש ליצור ידנית.")
 
 st.info(f"מחובר לטופס: `{FORM_ID}`")
 
@@ -176,9 +146,10 @@ with st.form("test_form"):
     with col2:
         semesters_input = st.text_input("סמסטרים", value="1,2")
     
-    submitted = st.form_submit_button("הרץ בדיקה 🚀")
+    submitted = st.form_submit_button("הרץ עדכון טופס 🚀")
 
 if submitted:
+    # בדיקות תקינות
     is_year_valid, year_msg = validate_year(year_input)
     if not is_year_valid:
         st.error(year_msg)
@@ -189,22 +160,24 @@ if submitted:
         st.error("שגיאה בסמסטרים")
         st.stop()
 
-    with st.spinner("מתחבר לרובוט ומבצע פעולות..."):
+    # ביצוע
+    with st.spinner("הרובוט בונה את הטופס..."):
         try:
-            excel_url, excel_name = manage_response_sheet(year_input, clean_semesters)
-            st.success(f"✅ שלב 1 עבר: נוצר קובץ אקסל ({excel_name})")
-            
+            # אנחנו מריצים רק את עדכון המבנה
             update_form_structure(year_input, clean_semesters)
-            st.success("✅ שלב 2 עבר: הטופס עודכן בהצלחה")
             
+            st.success("✅ הטופס עודכן בהצלחה!")
             st.balloons()
             
             st.markdown("---")
-            st.markdown("### 🎉 הבדיקה עברה בהצלחה!")
+            st.markdown("### 🛑 מה עכשיו? (חיבור לאקסל)")
+            st.markdown("מכיוון שהרובוט חסום ליצירת קבצים, עשי זאת ידנית:")
             st.markdown(f"1. **[לחצי כאן לפתיחת הטופס]({f'https://docs.google.com/forms/d/{FORM_ID}/edit'})**")
-            st.markdown(f"2. **[לחצי כאן לפתיחת האקסל החדש]({excel_url})**")
-            st.warning(f"בתוך הטופס: Responses -> Link to Sheets -> Select existing spreadsheet -> בחרי את **{excel_name}**")
+            st.markdown("2. עברי ללשונית **Responses** (תגובות).")
+            st.markdown("3. לחצי על **Link to Sheets**.")
+            st.markdown("4. בחרי **Create a new spreadsheet** ולחצי Create.")
+            st.info("זהו! הטופס מוכן ומחובר.")
 
         except Exception as e:
-            st.error("❌ הבדיקה נכשלה עם השגיאה הבאה:")
+            st.error("❌ אירעה שגיאה:")
             st.code(traceback.format_exc())
