@@ -533,13 +533,21 @@ def configure_gemini():
         return None
     
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    
-    # שימוש במודל היציב
-    model = genai.GenerativeModel(
-        model_name="models/gemini-flash-latest",
-        system_instruction=LOOZ_INSTRUCTIONS
+
+    # --- כאן מוסיפים את ה"כפתורים" לשליטה על היצירתיות ---
+    config = {
+        "temperature": 0.0,    # 0 = רובוט מדויק וקשוח (מעולה ל-LOOZ)
+        "top_p": 0.95,         # פרמטרים לייצוב התשובה
+        "top_k": 40,
+        "max_output_tokens": 8192, # מאפשר תשובות ארוכות ומפורטות
+    }
+
+    # יצירת המודל עם ההגדרות החדשות
+    return genai.GenerativeModel(
+        model_name="gemini-1.5-flash", 
+        system_instruction=LOOZ_INSTRUCTIONS,
+        generation_config=config  # <--- הזרקת ההגדרות פנימה
     )
-    return model
 
 # --- ממשק המשתמש ---
 st.title("🎓 מערכת ניהול מערכת שעות")
@@ -646,4 +654,5 @@ elif action == "בנה לי שאלון":
     quest.run()
 elif action == "עדכן שמות שדות קובץ תשובות":
     update_headers.run()
+
 
