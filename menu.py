@@ -77,7 +77,7 @@ def configure_gemini():
     ]
 
     return genai.GenerativeModel(
-        model_name="gemini-1.5-flash", 
+        model_name="models/gemini-flash-latest", 
         system_instruction=brain_instructions,
         generation_config=config,
         safety_settings=safety_settings # הוספנו את זה כאן
@@ -187,6 +187,7 @@ elif action == "בנה לי שאלון":
     quest.run()
 elif action == "עדכן שמות שדות קובץ תשובות":
     update_headers.run()
+
 
 
 
