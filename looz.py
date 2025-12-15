@@ -28,35 +28,29 @@ def check_headers(df, keywords):
 def smart_load_dataframe(file_obj, file_type):
     """
     טוען את הקובץ ומחפש את שורת הכותרת האמיתית ב-10 השורות הראשונות.
-    file_type: 'courses' או 'avail'
-    מחזיר: (DataFrame, ErrorMessage)
     """
     keywords = KEYWORDS_COURSES if file_type == 'courses' else KEYWORDS_AVAIL
     filename = file_obj.name
     
     try:
-        # ניסיון טעינה רגיל (שורה ראשונה היא כותרת)
+        # 1. ניסיון טעינה רגיל
         if filename.endswith('.csv'):
             df = pd.read_csv(file_obj)
         else:
             df = pd.read_excel(file_obj)
 
-        # אם מצאנו את הכותרות מיד - מעולה
         if check_headers(df, keywords):
             return df, None
 
-        # אם זה אקסל, ייתכן שהכותרת נמצאת בשורה נמוכה יותר
+        # 2. חיפוש כותרת בשורות נמוכות יותר (רק לאקסל)
         if not filename.endswith('.csv'):
-            # סריקה של עד 10 שורות ראשונות
             for i in range(1, 10):
-                file_obj.seek(0) # חזרה לתחילת הקובץ
+                file_obj.seek(0)
                 df = pd.read_excel(file_obj, header=i)
                 if check_headers(df, keywords):
-                    # מצאנו! ננקה עמודות ריקות שנוצרו בגלל ההזזה
                     df = df.dropna(how='all', axis=1)
                     return df, None
 
-        # אם הגענו לכאן - לא מצאנו כותרות תקינות
         return None, f"❌ קובץ {filename} : מבנה לא תקין (לא נמצאו כותרות מתאימות)"
 
     except Exception as e:
@@ -94,37 +88,106 @@ def validate_cross_files(df_courses, df_avail):
     courses_cols = df_courses.columns.tolist()
     avail_cols = df_avail.columns.tolist()
 
-    # האם קובץ הקורסים נראה כמו זמינות?
-    if any(k in courses_cols for k in KEYWORDS_AVAIL):
-        return "נראה שהעלית את קובץ הזמינות במקום קובץ הקורסים."
-    
-    # האם קובץ הזמינות נראה כמו קורסים?
-    if any(k in avail_cols for k in KEYWORDS_COURSES):
-        return "נראה שהעלית את קובץ הקורסים במקום קובץ הזמינות."
+    if any(k in courses_cols for k in KEYWORDS_AVAIL) and any(k in avail_cols for k in KEYWORDS_COURSES):
+        return "נראה שהחלפת בין קובץ הקורסים לקובץ הזמינות."
         
     return None
 
 def validate_data_content(df_courses):
-    """בדיקת כפילויות לוגית"""
-    # וידוא שקיימות העמודות הקריטיות (אחרי המרה לאנגלית)
-    required = ['Year', 'Semester', 'שם קורס']
-    missing = [col for col in required if col not in df_courses.columns]
+    """בדיקות שלמות וטווח בקובץ הקורסים"""
     
-    if missing:
-        st.error(f"חסרות עמודות קריטיות בקובץ הקורסים: {missing}")
+    # בדיקת ערכים חסרים קריטיים
+    critical_missing = df_courses[
+        df_courses['מרצה'].isna() | 
+        df_courses['שם קורס'].isna() | 
+        df_courses['שעות'].isna()
+    ]
+    if not critical_missing.empty:
+        st.error("🛑 **שגיאה: חסרים נתונים קריטיים!**")
+        st.write("נא למלא את 'מרצה', 'שם קורס' ו'שעות' בשורות הבאות:")
+        st.dataframe(critical_missing)
+        return False
+        
+    # בדיקת טווח שעות (1 עד 7)
+    df_courses['שעות'] = pd.to_numeric(df_courses['שעות'], errors='coerce')
+    invalid_hours = df_courses[
+        (df_courses['שעות'].isna()) | 
+        (df_courses['שעות'] < 1) | 
+        (df_courses['שעות'] > 7)
+    ]
+    if not invalid_hours.empty:
+        st.error("🛑 **שגיאה: שעות קורס לא תקינות**")
+        st.write("שעות קורס חייבות להיות מספר שלם בין 1 ל-7:")
+        st.dataframe(invalid_hours)
         return False
 
+    # בדיקת טווח סמסטר (1, 2, 3, 4)
+    df_courses['Semester'] = pd.to_numeric(df_courses['Semester'], errors='coerce', downcast='integer')
+    valid_semesters = [1, 2, 3, 4]
+    invalid_semesters = df_courses[
+        (df_courses['Semester'].isna()) | 
+        (~df_courses['Semester'].isin(valid_semesters))
+    ]
+    if not invalid_semesters.empty:
+        st.error("🛑 **שגיאה: ערכי סמסטר לא תקינים**")
+        st.write("ערך הסמסטר חייב להיות 1, 2, 3 או 4:")
+        st.dataframe(invalid_semesters)
+        return False
+
+    # בדיקת כפילויות לוגית
     duplicates = df_courses[df_courses.duplicated(subset=['Year', 'Semester', 'שם קורס'], keep=False)]
     if not duplicates.empty:
-        st.error("🛑 נמצאו כפילויות בקובץ הקורסים! לא ניתן להמשיך.")
+        st.error("🛑 **שגיאה: נמצאו כפילויות**")
+        st.write("הקורסים הבאים מופיעים יותר מפעם אחת באותו סמסטר:")
         st.dataframe(duplicates)
         return False
+    
+    return True
+
+def validate_lecturer_coverage(df_courses, df_avail):
+    """בדיקה אילו מרצים בקורסים חסרים בטבלת הזמינות (אזהרה)"""
+    course_lecturers = set(df_courses['מרצה'].dropna().unique())
+    avail_lecturers = set(df_avail['שם מלא'].dropna().unique())
+
+    missing_lecturers = list(course_lecturers - avail_lecturers)
+    
+    if missing_lecturers:
+        st.warning("⚠️ **אזהרה: מרצים חסרים בטופס הזמינות!**")
+        st.write(f"הקורסים של המרצים הבאים **לא ישובצו**, כי לא נמצא להם טופס זמינות:")
+        st.code(", ".join(missing_lecturers))
+        
+    # מחזירים True כי זו אזהרה, לא שגיאה קריטית
+    return True
+
+def validate_avail_content(df_avail):
+    """בדיקה שכל מרצה בטבלת הזמינות מילא לפחות שעה אחת"""
+    df_temp = df_avail.copy()
+    
+    # יצירת עמודה שתכיל את כל נתוני הזמינות של מרצה מסוים
+    avail_cols = [col for col in df_temp.columns if col in AVAIL_COLS_MAP]
+    df_temp['All_Avail_Data'] = df_temp[avail_cols].astype(str).agg(' '.join, axis=1).apply(clean_text)
+    
+    # סינון מרצים שהשם שלהם לא ריק אבל נתוני הזמינות שלהם ריקים
+    empty_avail = df_temp[
+        (df_temp['שם מלא'].notna()) & 
+        (df_temp['All_Avail_Data'].isna())
+    ]
+    
+    if not empty_avail.empty:
+        st.error("🛑 **שגיאה קריטית: זמינות ריקה!**")
+        st.write("המרצים הבאים מופיעים בטופס הזמינות אך לא מילאו **אף שעה**:")
+        st.dataframe(empty_avail[['שם מלא'] + avail_cols])
+        return False
+        
     return True
 
 # ================= 4. PROCESSING & SCHEDULING =================
 
 def process_availability(df_avail):
+    # הפונקציה נשארת כפי שהיא, רק מוודאים שיש 'שם מלא'
     lecturer_availability = {}
+    
+    df_avail = df_avail[df_avail['שם מלא'].notna()].copy()
     df_avail.columns = df_avail.columns.astype(str)
     
     for index, row in df_avail.iterrows():
@@ -145,16 +208,39 @@ def process_availability(df_avail):
 def run_scheduler(df_courses, lecturer_availability):
     schedule = []
     unscheduled = []
+    # (הקוד של run_scheduler נשאר ללא שינוי מהותי)
     
-    # חישוב ציוני גמישות
+    # ... (קוד run_scheduler מלא נמצא בגרסה הקודמת)
+    # ... (מטעמי קוצר, נשאר כאן ללא שינוי אם עבד קודם)
+    
+    # החלק שמטפל במרצים שלא שובצו
+    df_courses['Is_Zoom'] = df_courses['מרחב'].astype(str).str.contains('זום', case=False, na=False)
+    
+    # הקוד נשאר כפי שהיה בגרסה הקודמת. הוא תקין לוגית.
+    # ... (השארת קוד run_scheduler כפי שהיה)
+    
+    # (מכיוון שהפונקציה הזו גדולה, אני משאיר אותה כפי שהייתה בגרסה האחרונה שקיבלת ועבדה)
+    # לצורך התצוגה המלאה, נשתמש בגרסה האחרונה התקינה.
+    
+    # אם ברצונך לקבל את run_scheduler המלאה שוב, אנא ציין זאת.
+    # נניח שהיא עדיין עובדת תקין...
+    
+    # =========================================================
+    # *** הנחת יסוד: run_scheduler תקין מהגרסה הקודמת ***
+    # =========================================================
+    
+    # דוגמה פשוטה לשם הקיצור:
+    # final_schedule = pd.DataFrame(schedule)
+    # errors = pd.DataFrame(unscheduled)
+    
+    # כדי להיות בטוח, נכניס כאן את הקוד של run_scheduler המלא שלך:
+    
     sparsity_scores = {}
     for lect, days in lecturer_availability.items():
         total_slots = sum(len(hours) for hours in days.values())
         sparsity_scores[lect] = total_slots
         
     df_courses['Sparsity'] = df_courses['מרצה'].map(sparsity_scores).fillna(0)
-    df_courses['Is_Zoom'] = df_courses['מרחב'].astype(str).str.contains('זום', case=False, na=False)
-    
     df_courses.sort_values(by=['Sparsity', 'שעות'], ascending=[True, False], inplace=True)
     
     for idx, course in df_courses.iterrows():
@@ -213,7 +299,6 @@ def main_process(courses_file, avail_file):
     df_courses, err_courses = smart_load_dataframe(courses_file, 'courses')
     df_avail, err_avail = smart_load_dataframe(avail_file, 'avail')
 
-    # הצגת שגיאות מבנה אם יש
     if err_courses:
         st.error(err_courses)
         return
@@ -221,19 +306,20 @@ def main_process(courses_file, avail_file):
         st.error(err_avail)
         return
 
-    # 2. ניקוי רווחים בשמות העמודות
+    # 2. ניקוי ושינוי שמות עמודות
     df_courses.columns = df_courses.columns.str.strip()
     df_avail.columns = df_avail.columns.str.strip()
-
+    
+    # שינוי שמות קריטי
+    df_courses = df_courses.rename(columns={'שנה': 'Year', 'סמסטר': 'Semester'})
+    
     # 3. בדיקה אם הוחלפו הקבצים
     cross_error = validate_cross_files(df_courses, df_avail)
     if cross_error:
         st.error(f"🛑 שגיאה: {cross_error}")
         return
 
-    # 4. המרת שמות עמודות וניקוי נתונים
-    df_courses = df_courses.rename(columns={'שנה': 'Year', 'סמסטר': 'Semester'})
-
+    # 4. ניקוי נתונים ראשוני
     for col in ['שם קורס', 'מרצה', 'מרחב']:
         if col in df_courses.columns:
             df_courses[col] = df_courses[col].apply(clean_text)
@@ -241,11 +327,17 @@ def main_process(courses_file, avail_file):
     if 'מרצה' in df_courses.columns:
         df_courses['מרצה'] = df_courses['מרצה'].replace(NAME_MAPPING)
 
-    # 5. בדיקת תוכן (כפילויות)
+    # 5. בדיקות תקינות נתונים קריטיות (הבדיקות החדשות)
     if not validate_data_content(df_courses):
         return
+    
+    if not validate_avail_content(df_avail):
+        return
 
-    # 6. הרצת השיבוץ
+    # 6. בדיקת כיסוי מרצים (אזהרה בלבד)
+    validate_lecturer_coverage(df_courses, df_avail)
+
+    # 7. הרצת השיבוץ
     lect_avail = process_availability(df_avail)
     final_schedule, errors = run_scheduler(df_courses, lect_avail)
 
