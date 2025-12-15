@@ -3,6 +3,7 @@ import google.generativeai as genai
 import quest  # הקובץ השני
 import pandas as pd
 import traceback
+import update_headers
 
 # --- הגדרת העמוד ---
 st.set_page_config(page_title="מערכת ניהול רופין", page_icon="🎓", layout="centered")
@@ -546,7 +547,7 @@ st.title("🎓 מערכת ניהול מערכת שעות")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-action = st.radio("בחר פעולה:", ["בנה לי מערכת (LOOZ)", "בנה לי שאלון"], horizontal=True)
+action = st.radio("בחר פעולה:", ["בנה לי מערכת (LOOZ)", "בנה לי שאלון", "עדכן שמות שדות קובץ תשובות"], horizontal=True)
 st.markdown("---")
 
 # === לוגיקה של LOOZ ===
@@ -643,3 +644,6 @@ if action == "בנה לי מערכת (LOOZ)":
 
 elif action == "בנה לי שאלון":
     quest.run()
+elif action == "עדכן שמות שדות קובץ תשובות":
+    update_headers.run()
+
