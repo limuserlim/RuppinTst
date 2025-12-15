@@ -38,13 +38,22 @@ if action == "בנה לי מערכת (LOOZ)":
     # כפתור ההפעלה
     if st.button("התחל בבניית המערכת 🚀", type="primary", use_container_width=True):
         if courses_file and avail_file:
-            # --- קריאה ישירה לקובץ המקומי ---
-            try:
-                looz.main_process(courses_file, avail_file)
-            except Exception as e:
-                st.error(f"שגיאה בהרצת המערכת: {e}")
-                st.write("פרטי שגיאה למפתח:")
-                st.exception(e)
+            st.toast("התהליך התחיל...", icon="🚦") # חיווי קופץ שהכפתור נלחץ
+            
+            # גלגל טעינה שרץ בזמן שהפונקציה עובדת
+            with st.spinner("🤖 המוח (looz.py) מעבד את הנתונים, נא להמתין..."):
+                try:
+                    # איפוס המצביע של הקבצים (למקרה שנקראו כבר)
+                    courses_file.seek(0)
+                    avail_file.seek(0)
+                    
+                    # קריאה למוח
+                    looz.main_process(courses_file, avail_file)
+                    
+                except Exception as e:
+                    st.error(f"שגיאה בהרצת המערכת: {e}")
+                    st.write("פרטי שגיאה למפתח:")
+                    st.exception(e)
         else:
             st.error("⚠️ עצור! חובה להעלות את שני הקבצים (קורסים וזמינות) לפני ההתחלה.")
 
