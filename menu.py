@@ -1,3 +1,4 @@
+import importlib
 import streamlit as st
 import looz           # המוח המקומי החדש
 import quest          # בונה השאלונים
@@ -36,26 +37,37 @@ if action == "בנה לי מערכת (LOOZ)":
     st.markdown("<br>", unsafe_allow_html=True)
     
     # כפתור ההפעלה
+    # כפתור ההפעלה
     if st.button("התחל בבניית המערכת 🚀", type="primary", use_container_width=True):
         if courses_file and avail_file:
-            st.toast("התהליך התחיל...", icon="🚦") # חיווי קופץ שהכפתור נלחץ
+            st.toast("התהליך התחיל...", icon="🚦")
             
-            # גלגל טעינה שרץ בזמן שהפונקציה עובדת
-            with st.spinner("🤖 המוח (looz.py) מעבד את הנתונים, נא להמתין..."):
-                try:
-                    # איפוס המצביע של הקבצים (למקרה שנקראו כבר)
-                    courses_file.seek(0)
-                    avail_file.seek(0)
-                    
-                    # קריאה למוח
+            # אזור תצוגת לוגים בזמן אמת
+            status_box = st.empty()
+            status_box.info("🔄 טוען את המוח העדכני...")
+
+            try:
+                # 1. רענון כפוי של הקוד (פותר את בעיית הזיכרון)
+                importlib.reload(looz)
+                status_box.info("✅ המוח נטען בהצלחה. מעבד נתונים...")
+                
+                # 2. איפוס קבצים
+                courses_file.seek(0)
+                avail_file.seek(0)
+                
+                # 3. הרצת המוח עם ספינר
+                with st.spinner("🤖 המוח עובד... נא להמתין"):
                     looz.main_process(courses_file, avail_file)
-                    
-                except Exception as e:
-                    st.error(f"שגיאה בהרצת המערכת: {e}")
-                    st.write("פרטי שגיאה למפתח:")
-                    st.exception(e)
+                
+                # 4. הודעת סיום (אם המוח לא הדפיס כלום)
+                status_box.success("🏁 התהליך הסתיים! (גלול למטה לתוצאות)")
+                
+            except Exception as e:
+                status_box.error("❌ התרחשה שגיאה!")
+                st.error(f"שגיאה קריטית: {e}")
+                st.exception(e)
         else:
-            st.error("⚠️ עצור! חובה להעלות את שני הקבצים (קורסים וזמינות) לפני ההתחלה.")
+            st.error("⚠️ עצור! חובה להעלות את שני הקבצים לפני ההתחלה.")
 
 # --- אפשרות 2: שאלון ---
 elif action == "בנה לי שאלון":
@@ -64,4 +76,5 @@ elif action == "בנה לי שאלון":
 # --- אפשרות 3: עדכון כותרות ---
 elif action == "עדכן שמות שדות קובץ תשובות":
     update_headers.run()
+
 
