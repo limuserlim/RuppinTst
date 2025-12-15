@@ -49,30 +49,38 @@ def get_brain_from_docs():
         return "שגיאה בטעינת המוח."
 
 # --- הגדרת המוח של LOOZ ---
-def configure_gemini():
+ def configure_gemini():
     if "GOOGLE_API_KEY" not in st.secrets:
         st.error("חסר מפתח GOOGLE_API_KEY")
         return None
     
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-    # 1. קריאה לפונקציה החדשה כדי לקבל את ההוראות מהדוקס
-    brain_instructions = get_brain_from_docs() 
+    # טעינת המוח מהדוקס
+    brain_instructions = get_brain_from_docs()
     
-    # הדפסה קטנה למסך (רק כדי שתדעי שזה עבד - אפשר למחוק אח"כ)
-    # st.caption("✅ המוח נטען בהצלחה מ-Google Docs")
-
+    # הגדרות יצירתיות
     config = {
-        "temperature": 0.0,
+        "temperature": 0.0, # דיוק מקסימלי
         "top_p": 0.95,
         "top_k": 40,
         "max_output_tokens": 8192,
     }
 
+    # --- התיקון: ביטול מסנני הבטיחות ---
+    # זה מונע את שגיאה finish_reason 2
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+
     return genai.GenerativeModel(
-        model_name="models/gemini-flash-latest",
-        system_instruction=brain_instructions, # 👈 כאן השינוי! משתמשים במשתנה החדש
-        generation_config=config 
+        model_name="gemini-1.5-flash", 
+        system_instruction=brain_instructions,
+        generation_config=config,
+        safety_settings=safety_settings # הוספנו את זה כאן
     )
 
 # --- ממשק המשתמש ---
@@ -180,6 +188,7 @@ elif action == "בנה לי שאלון":
     quest.run()
 elif action == "עדכן שמות שדות קובץ תשובות":
     update_headers.run()
+
 
 
 
