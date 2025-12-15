@@ -3,6 +3,7 @@ import streamlit as st
 import looz           # המוח המקומי החדש
 import quest          # בונה השאלונים
 import update_headers # עדכון כותרות
+import sys # נדרש לבדיקת מודולים
 
 # --- הגדרת העמוד ---
 st.set_page_config(page_title="מערכת ניהול רופין", page_icon="🎓", layout="centered")
@@ -13,9 +14,10 @@ st.set_page_config(page_title="מערכת ניהול רופין", page_icon="�
 
 st.title("🎓 ניהול מערכת שעות")
 
-# תפריט בחירה
+# תפריט בחירה - index=None מוודא שאין ברירת מחדל
 action = st.radio("בחר כלי לעבודה:", 
                   ["בנה לי מערכת (LOOZ)", "בנה לי שאלון", "עדכן שמות שדות קובץ תשובות"], 
+                  index=None, 
                   horizontal=True)
 st.markdown("---")
 
@@ -58,7 +60,7 @@ if action == "בנה לי מערכת (LOOZ)":
                 with st.spinner("🤖 המוח עובד... נא להמתין"):
                     looz.main_process(courses_file, avail_file)
                 
-                # 4. הודעת סיום (אם המוח לא הדפיס כלום)
+                # 4. הודעת סיום
                 status_box.success("🏁 התהליך הסתיים! (גלול למטה לתוצאות)")
                 
             except Exception as e:
@@ -66,13 +68,24 @@ if action == "בנה לי מערכת (LOOZ)":
                 st.error(f"שגיאה קריטית: {e}")
                 st.exception(e)
         else:
-            st.error("⚠️  חובה להעלות את שני הקבצים לפני ההתחלה.")
+            st.error("⚠️ חובה להעלות את שני הקבצים לפני ההתחלה.")
 
 # --- אפשרות 2: שאלון ---
 elif action == "בנה לי שאלון":
-    quest.run()
+    # ניתן לוודא שהמודול נטען
+    if 'quest' in sys.modules: 
+        quest.run()
+    else:
+        st.error("המודול 'quest' אינו זמין.")
+
 
 # --- אפשרות 3: עדכון כותרות ---
 elif action == "עדכן שמות שדות קובץ תשובות":
-    update_headers.run()
+    if 'update_headers' in sys.modules:
+        update_headers.run()
+    else:
+        st.error("המודול 'update_headers' אינו זמין.")
 
+# --- מקרה ברירת מחדל (אף אפשרות לא נבחרה בהתחלה) ---
+elif action is None:
+    st.info("⬆️ אנא בחר אחת מהאפשרויות למעלה כדי להתחיל לעבוד.")
