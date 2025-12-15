@@ -1,11 +1,10 @@
 import pandas as pd
 import numpy as np
-import io
 import streamlit as st
 
 # ================= CONFIGURATION =================
 
-# מיפוי שמות ידני לטיפול באי-התאמות (קורסים -> זמינות)
+# מיפוי שמות ידני לטיפול באי-התאמות
 NAME_MAPPING = {
     'מיכל רופא': 'מיכל רופא תכנון אקלימי',
     'נעמה ציזר שבתאי': 'נעמה שבתאי-ציזר',
@@ -13,21 +12,18 @@ NAME_MAPPING = {
     'מתרגל': 'נועה גינו'
 }
 
-# מיפוי עמודות זמינות לימים
 AVAIL_COLS_MAP = {'12': 1, '22': 2, '32': 3, '42': 4, '52': 5}
-HOURS_RANGE = range(8, 22) # טווח שעות בדיקה
+HOURS_RANGE = range(8, 22)
 
 # ================= 1. DATA CLEANING UTILS =================
 
 def clean_text(text):
-    """ניקוי רווחים כפולים ושטחים ריקים"""
     if pd.isna(text) or str(text).strip() == "":
         return None
     text = str(text).strip()
     return " ".join(text.split())
 
 def parse_availability_string(avail_str):
-    """מפענח מחרוזת כמו '16-17, 17-18' לרשימת שעות"""
     slots = set()
     if pd.isna(avail_str) or str(avail_str).strip() == "":
         return slots
@@ -47,19 +43,11 @@ def parse_availability_string(avail_str):
 # ================= 2. VALIDATION =================
 
 def validate_data(df_courses):
-    """בדיקת ייחודיות מחמירה"""
-    st.info("🔍 מבצע בדיקת תקינות וכפילויות...")
-    
-    # הערה: שינוי השמות הועבר ל-main_process כדי להיות גלובלי
-    
     duplicates = df_courses[df_courses.duplicated(subset=['Year', 'Semester', 'שם קורס'], keep=False)]
-    
     if not duplicates.empty:
-        st.error("🛑 נמצאו כפילויות בקובץ הקורסים! לא ניתן להמשיך בשיבוץ.")
-        st.write("הקורסים הבאים מופיעים יותר מפעם אחת באותו סמסטר:")
+        st.error("🛑 נמצאו כפילויות בקובץ הקורסים! לא ניתן להמשיך.")
         st.dataframe(duplicates)
         return False
-        
     return True
 
 # ================= 3. PROCESSING & SCHEDULING =================
@@ -70,9 +58,6 @@ def process_availability(df_avail):
     
     for index, row in df_avail.iterrows():
         raw_name = row.get('שם מלא', '')
-        if pd.isna(raw_name) or str(raw_name).strip() == "":
-            continue
-            
         lecturer = clean_text(raw_name)
         if not lecturer: continue
         
@@ -84,12 +69,9 @@ def process_availability(df_avail):
                 slots = parse_availability_string(val)
                 if slots:
                     lecturer_availability[lecturer][day_num] = slots
-                    
     return lecturer_availability
 
 def run_scheduler(df_courses, lecturer_availability):
-    st.toast("⚙️ המנוע מחשב שיבוץ אופטימלי...", icon="🤖")
-    
     schedule = []
     unscheduled = []
     
@@ -102,20 +84,18 @@ def run_scheduler(df_courses, lecturer_availability):
     df_courses['Sparsity'] = df_courses['מרצה'].map(sparsity_scores).fillna(0)
     df_courses['Is_Zoom'] = df_courses['מרחב'].astype(str).str.contains('זום', case=False, na=False)
     
-    # מיון חכם
     df_courses.sort_values(by=['Sparsity', 'שעות'], ascending=[True, False], inplace=True)
     
-    # לולאת השיבוץ
     for idx, course in df_courses.iterrows():
         lecturer = course['מרצה']
-        if pd.isna(lecturer): continue
-        
         course_name = course['שם קורס']
         duration = int(course['שעות']) if not pd.isna(course['שעות']) else 2
         year = course['Year']
         semester = course['Semester']
         is_zoom = course['Is_Zoom']
         
+        if pd.isna(lecturer): continue
+
         if lecturer not in lecturer_availability:
             unscheduled.append({'Course': course_name, 'Lecturer': lecturer, 'Reason': "חסרה טופס זמינות"})
             continue
@@ -126,22 +106,17 @@ def run_scheduler(df_courses, lecturer_availability):
         
         for day in range(1, 6):
             if placed: break
-            
             lect_slots = lecturer_availability[lecturer].get(day, set())
             
             for start_hour in hours_order:
                 if start_hour + duration > 22: continue
-                
                 needed_slots = set(range(start_hour, start_hour + duration))
                 if not needed_slots.issubset(lect_slots): continue
                 
-                # בדיקת התנגשויות
                 conflict = False
                 for item in schedule:
                     if item['Day'] == day and item['Semester'] == semester:
-                        # חפיפת שעות
                         if max(start_hour, item['Hour']) < min(start_hour + duration, item['Hour'] + item['Duration']):
-                            # אותו מרצה או אותו שנתון (Year)
                             if item['Lecturer'] == lecturer or item['Year'] == year:
                                 conflict = True; break
                 
@@ -162,10 +137,8 @@ def run_scheduler(df_courses, lecturer_availability):
 # ================= 4. MAIN PROCESS ENTRY POINT =================
 
 def main_process(courses_file, avail_file):
-    """זו הפונקציה שהמערכת קוראת לה מבחוץ"""
-    
-    # טעינת הנתונים
     try:
+        # טעינה לפי סוג קובץ
         if courses_file.name.endswith('.csv'):
             df_courses = pd.read_csv(courses_file)
         else:
@@ -180,8 +153,55 @@ def main_process(courses_file, avail_file):
         st.error(f"שגיאה בטעינת הקבצים: {e}")
         return
 
-    # ניקוי בסיסי של הכותרות
+    # ניקוי כותרות ושינוי שמות (התיקון הקריטי)
     df_courses.columns = df_courses.columns.str.strip()
     df_avail.columns = df_avail.columns.str.strip()
+    df_courses = df_courses.rename(columns={'שנה': 'Year', 'סמסטר': 'Semester'})
 
-    # --- התיקון הקריטי: המרת שמות עמודות כאן, לפני הכל ---
+    # נרמול טקסט
+    for col in ['שם קורס', 'מרצה', 'מרחב']:
+        if col in df_courses.columns:
+            df_courses[col] = df_courses[col].apply(clean_text)
+            
+    if 'מרצה' in df_courses.columns:
+        df_courses['מרצה'] = df_courses['מרצה'].replace(NAME_MAPPING)
+
+    if not validate_data(df_courses):
+        return
+
+    lect_avail = process_availability(df_avail)
+    final_schedule, errors = run_scheduler(df_courses, lect_avail)
+
+    st.markdown("---")
+    st.markdown("### 📊 סיכום ריצה")
+    
+    # --- טיפול בתוצאות והורדה ---
+    if not final_schedule.empty:
+        st.success(f"✅ הצלחנו לשבץ {len(final_schedule)} הרצאות!")
+        st.dataframe(final_schedule, use_container_width=True)
+        
+        # המרה ל-CSV עם קידוד לעברית
+        csv = final_schedule.to_csv(index=False).encode('utf-8-sig')
+        
+        st.download_button(
+            label="📥 הורד את הטבלה כקובץ CSV",
+            data=csv,
+            file_name='final_schedule.csv',
+            mime='text/csv',
+            key='download-btn-success'
+        )
+    else:
+        st.warning("⚠️ המערכת רצה, אך לא הצליחה לשבץ אף הרצאה.")
+        st.info("בדוק את שמות המרצים בקבצים - האם הם זהים בשני הקבצים?")
+        
+    if not errors.empty:
+        st.markdown("#### ❌ שגיאות שיבוץ (לא שובצו)")
+        st.dataframe(errors)
+        csv_err = errors.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 הורד דוח שגיאות",
+            data=csv_err,
+            file_name='errors.csv',
+            mime='text/csv',
+            key='download-btn-error'
+        )
