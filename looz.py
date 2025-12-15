@@ -14,7 +14,55 @@ NAME_MAPPING = {
 AVAIL_COLS_MAP = {'12': 1, '22': 2, '32': 3, '42': 4, '52': 5}
 HOURS_RANGE = range(8, 22)
 
-# ================= 1. DATA CLEANING UTILS =================
+# מילות מפתח לזיהוי כותרות
+KEYWORDS_COURSES = ['שם קורס', 'שם הקורס', 'Course Name']
+KEYWORDS_AVAIL = ['שם מלא', 'שם מרצה', 'שם המרצה']
+
+# ================= 1. SMART LOADER (החלק החדש) =================
+
+def check_headers(df, keywords):
+    """בדיקה האם רשימת הכותרות מכילה את אחת ממילות המפתח"""
+    cols = [str(c).strip() for c in df.columns]
+    return any(k in cols for k in keywords)
+
+def smart_load_dataframe(file_obj, file_type):
+    """
+    טוען את הקובץ ומחפש את שורת הכותרת האמיתית ב-10 השורות הראשונות.
+    file_type: 'courses' או 'avail'
+    מחזיר: (DataFrame, ErrorMessage)
+    """
+    keywords = KEYWORDS_COURSES if file_type == 'courses' else KEYWORDS_AVAIL
+    filename = file_obj.name
+    
+    try:
+        # ניסיון טעינה רגיל (שורה ראשונה היא כותרת)
+        if filename.endswith('.csv'):
+            df = pd.read_csv(file_obj)
+        else:
+            df = pd.read_excel(file_obj)
+
+        # אם מצאנו את הכותרות מיד - מעולה
+        if check_headers(df, keywords):
+            return df, None
+
+        # אם זה אקסל, ייתכן שהכותרת נמצאת בשורה נמוכה יותר
+        if not filename.endswith('.csv'):
+            # סריקה של עד 10 שורות ראשונות
+            for i in range(1, 10):
+                file_obj.seek(0) # חזרה לתחילת הקובץ
+                df = pd.read_excel(file_obj, header=i)
+                if check_headers(df, keywords):
+                    # מצאנו! ננקה עמודות ריקות שנוצרו בגלל ההזזה
+                    df = df.dropna(how='all', axis=1)
+                    return df, None
+
+        # אם הגענו לכאן - לא מצאנו כותרות תקינות
+        return None, f"❌ קובץ {filename} : מבנה לא תקין (לא נמצאו כותרות מתאימות)"
+
+    except Exception as e:
+        return None, f"❌ קובץ {filename} : שגיאה בטעינה ({str(e)})"
+
+# ================= 2. DATA CLEANING UTILS =================
 
 def clean_text(text):
     if pd.isna(text) or str(text).strip() == "":
@@ -39,47 +87,37 @@ def parse_availability_string(avail_str):
                 continue
     return slots
 
-# ================= 2. VALIDATION (מבנה ותוכן) =================
+# ================= 3. VALIDATION (תוכן) =================
 
-def validate_file_structure(df_courses, df_avail):
-    """
-    בדיקה שהקבצים שהועלו הם מהסוג הנכון לפני שמתחילים לעבוד
-    """
-    # 1. ניקוי שמות העמודות מרווחים כדי שהבדיקה תהיה אמינה
-    df_courses.columns = df_courses.columns.str.strip()
-    df_avail.columns = df_avail.columns.str.strip()
+def validate_cross_files(df_courses, df_avail):
+    """מוודא שלא הוחלפו הקבצים"""
+    courses_cols = df_courses.columns.tolist()
+    avail_cols = df_avail.columns.tolist()
 
-    # אינדיקטורים לזיהוי קבצים
-    # בקובץ קורסים חייבת להיות עמודה של שם הקורס
-    is_course_file_valid = any(col in df_courses.columns for col in ['שם קורס', 'שם הקורס', 'Course Name'])
+    # האם קובץ הקורסים נראה כמו זמינות?
+    if any(k in courses_cols for k in KEYWORDS_AVAIL):
+        return "נראה שהעלית את קובץ הזמינות במקום קובץ הקורסים."
     
-    # בקובץ זמינות חייבת להיות עמודה של שם המרצה
-    is_avail_file_valid = any(col in df_avail.columns for col in ['שם מלא', 'שם מרצה', 'שם המרצה'])
-
-    # בדיקה האם המשתמש החליף בין הקבצים
-    courses_look_like_avail = any(col in df_courses.columns for col in ['שם מלא', 'שם מרצה'])
-    avail_looks_like_courses = any(col in df_avail.columns for col in ['שם קורס', 'שם הקורס'])
-
-    if courses_look_like_avail and avail_looks_like_courses:
-        st.error("🛑 **שגיאה: נראה שהחלפת בין הקבצים!**")
-        st.write("העלית את קובץ הזמינות למקום של קובץ הקורסים (ולהפך). נא להעלות מחדש בסדר הנכון.")
-        return False
-
-    if not is_course_file_valid:
-        st.error("🛑 **שגיאה בקובץ הקורסים**")
-        st.write("לא נמצאה העמודה 'שם קורס'. וודא שהעלית את הקובץ הנכון.")
-        st.write(f"העמודות שזוהו בקובץ: {list(df_courses.columns)}")
-        return False
-
-    if not is_avail_file_valid:
-        st.error("🛑 **שגיאה בקובץ הזמינות**")
-        st.write("לא נמצאה העמודה 'שם מלא' (של המרצה). וודא שהעלית את הקובץ הנכון.")
-        return False
-
-    return True
+    # האם קובץ הזמינות נראה כמו קורסים?
+    if any(k in avail_cols for k in KEYWORDS_COURSES):
+        return "נראה שהעלית את קובץ הקורסים במקום קובץ הזמינות."
+        
+    return None
 
 def validate_data_content(df_courses):
-    """בדיקת כפילויות בתוך הנתונים"""
+    """בדיקת כפילויות לוגית"""
+    # המרת שמות לפני בדיקה
+    df_courses = df_courses.rename(columns={'שנה': 'Year', 'סמסטר': 'Semester'})
+    
+    # וידוא שקיימות העמודות הקריטיות
+    required = ['Year', 'Semester', 'שם קורס']
+    missing = [col for col in required if col not in df_courses.columns]
+    
+    if missing:
+        # זה לא אמור לקרות בגלל הטעינה החכמה, אבל ליתר ביטחון
+        st.error(f"חסרות עמודות קריטיות בקובץ הקורסים: {missing}")
+        return False
+
     duplicates = df_courses[df_courses.duplicated(subset=['Year', 'Semester', 'שם קורס'], keep=False)]
     if not duplicates.empty:
         st.error("🛑 נמצאו כפילויות בקובץ הקורסים! לא ניתן להמשיך.")
@@ -87,7 +125,7 @@ def validate_data_content(df_courses):
         return False
     return True
 
-# ================= 3. PROCESSING & SCHEDULING =================
+# ================= 4. PROCESSING & SCHEDULING =================
 
 def process_availability(df_avail):
     lecturer_availability = {}
@@ -171,37 +209,35 @@ def run_scheduler(df_courses, lecturer_availability):
             
     return pd.DataFrame(schedule), pd.DataFrame(unscheduled)
 
-# ================= 4. MAIN PROCESS ENTRY POINT =================
+# ================= 5. MAIN PROCESS ENTRY POINT =================
 
 def main_process(courses_file, avail_file):
-    try:
-        # טעינה לפי סוג קובץ
-        if courses_file.name.endswith('.csv'):
-            df_courses = pd.read_csv(courses_file)
-        else:
-            df_courses = pd.read_excel(courses_file)
-            
-        if avail_file.name.endswith('.csv'):
-            df_avail = pd.read_csv(avail_file)
-        else:
-            df_avail = pd.read_excel(avail_file)
-            
-    except Exception as e:
-        st.error(f"שגיאה בטעינת הקבצים: {e}")
+    
+    # 1. טעינה חכמה (זיהוי שורת כותרת)
+    df_courses, err_courses = smart_load_dataframe(courses_file, 'courses')
+    df_avail, err_avail = smart_load_dataframe(avail_file, 'avail')
+
+    # הצגת שגיאות מבנה אם יש
+    if err_courses:
+        st.error(err_courses)
+        return
+    if err_avail:
+        st.error(err_avail)
         return
 
-    # --- בדיקת מבנה קבצים (החלק החדש) ---
-    if not validate_file_structure(df_courses, df_avail):
-        # אם הבדיקה נכשלה, עוצרים כאן ולא ממשיכים
-        return
-
-    # ניקוי כותרות ושינוי שמות
+    # 2. ניקוי רווחים בשמות העמודות
     df_courses.columns = df_courses.columns.str.strip()
     df_avail.columns = df_avail.columns.str.strip()
-    
+
+    # 3. בדיקה אם הוחלפו הקבצים
+    cross_error = validate_cross_files(df_courses, df_avail)
+    if cross_error:
+        st.error(f"🛑 שגיאה: {cross_error}")
+        return
+
+    # 4. המרת שמות עמודות וניקוי נתונים
     df_courses = df_courses.rename(columns={'שנה': 'Year', 'סמסטר': 'Semester'})
 
-    # נרמול טקסט
     for col in ['שם קורס', 'מרצה', 'מרחב']:
         if col in df_courses.columns:
             df_courses[col] = df_courses[col].apply(clean_text)
@@ -209,44 +245,28 @@ def main_process(courses_file, avail_file):
     if 'מרצה' in df_courses.columns:
         df_courses['מרצה'] = df_courses['מרצה'].replace(NAME_MAPPING)
 
-    # בדיקת תוכן (כפילויות)
+    # 5. בדיקת תוכן (כפילויות)
     if not validate_data_content(df_courses):
         return
 
-    # עיבוד וריצה
+    # 6. הרצת השיבוץ
     lect_avail = process_availability(df_avail)
     final_schedule, errors = run_scheduler(df_courses, lect_avail)
 
     st.markdown("---")
     st.markdown("### 📊 סיכום ריצה")
     
-    # --- טיפול בתוצאות והורדה ---
     if not final_schedule.empty:
         st.success(f"✅ הצלחנו לשבץ {len(final_schedule)} הרצאות!")
         st.dataframe(final_schedule, use_container_width=True)
         
-        # המרה ל-CSV עם קידוד לעברית
         csv = final_schedule.to_csv(index=False).encode('utf-8-sig')
-        
-        st.download_button(
-            label="📥 הורד את הטבלה כקובץ CSV",
-            data=csv,
-            file_name='final_schedule.csv',
-            mime='text/csv',
-            key='download-btn-success'
-        )
+        st.download_button("📥 הורד את הטבלה כקובץ CSV", csv, 'final_schedule.csv', 'text/csv', key='dl-success')
     else:
         st.warning("⚠️ המערכת רצה, אך לא הצליחה לשבץ אף הרצאה.")
-        st.info("בדוק את שמות המרצים בקבצים - האם הם זהים בשני הקבצים?")
         
     if not errors.empty:
         st.markdown("#### ❌ שגיאות שיבוץ (לא שובצו)")
         st.dataframe(errors)
         csv_err = errors.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(
-            label="📥 הורד דוח שגיאות",
-            data=csv_err,
-            file_name='errors.csv',
-            mime='text/csv',
-            key='download-btn-error'
-        )
+        st.download_button("📥 הורד דוח ש
