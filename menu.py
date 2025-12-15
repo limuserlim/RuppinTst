@@ -49,7 +49,7 @@ def get_brain_from_docs():
         return "שגיאה בטעינת המוח."
 
 # --- הגדרת המוח של LOOZ ---
- def configure_gemini():
+def configure_gemini():
     if "GOOGLE_API_KEY" not in st.secrets:
         st.error("חסר מפתח GOOGLE_API_KEY")
         return None
@@ -82,7 +82,6 @@ def get_brain_from_docs():
         generation_config=config,
         safety_settings=safety_settings # הוספנו את זה כאן
     )
-
 # --- ממשק המשתמש ---
 st.title("🎓 מערכת ניהול מערכת שעות")
 
@@ -188,6 +187,7 @@ elif action == "בנה לי שאלון":
     quest.run()
 elif action == "עדכן שמות שדות קובץ תשובות":
     update_headers.run()
+
 
 
 
