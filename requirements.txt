@@ -1,7 +1,8 @@
 streamlit
-google-generativeai
 google-auth
 google-api-python-client
 pandas
 openpyxl
 gspread
+google-generativeai>=0.7.0
+
