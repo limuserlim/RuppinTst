@@ -12,7 +12,7 @@ st.set_page_config(page_title="מערכת ניהול רופין", page_icon="�
 
 def get_brain_from_docs():
     # 👇 כאן תדביקי את ה-ID שהעתקת בשלב 1
-    DOCUMENT_ID = 'הדביקי_כאן_את_ה_ID_של_המסמך_שלך'
+    DOCUMENT_ID = '1zg7q93__eHUJ849z1Mi-JOJpS1ImqkeDdipMmTONUfM'
 
     try:
         # בדיקה שיש לנו את הסודות
@@ -70,7 +70,7 @@ def configure_gemini():
     }
 
     return genai.GenerativeModel(
-        model_name="gemini-1.5-flash", 
+        model_name="models/gemini-flash-latest",
         system_instruction=brain_instructions, # 👈 כאן השינוי! משתמשים במשתנה החדש
         generation_config=config 
     )
@@ -180,6 +180,7 @@ elif action == "בנה לי שאלון":
     quest.run()
 elif action == "עדכן שמות שדות קובץ תשובות":
     update_headers.run()
+
 
 
 
