@@ -14,11 +14,11 @@ NAME_MAPPING = {
 AVAIL_COLS_MAP = {'12': 1, '22': 2, '32': 3, '42': 4, '52': 5}
 HOURS_RANGE = range(8, 22)
 
-# מילות מפתח לזיהוי כותרות
+# מילות מפתח לזיהוי כותרות (Smart Loading)
 KEYWORDS_COURSES = ['שם קורס', 'שם הקורס', 'Course Name']
 KEYWORDS_AVAIL = ['שם מלא', 'שם מרצה', 'שם המרצה']
 
-# ================= 1. SMART LOADER (החלק החדש) =================
+# ================= 1. SMART LOADER (טעינה חכמה) =================
 
 def check_headers(df, keywords):
     """בדיקה האם רשימת הכותרות מכילה את אחת ממילות המפתח"""
@@ -106,15 +106,11 @@ def validate_cross_files(df_courses, df_avail):
 
 def validate_data_content(df_courses):
     """בדיקת כפילויות לוגית"""
-    # המרת שמות לפני בדיקה
-    df_courses = df_courses.rename(columns={'שנה': 'Year', 'סמסטר': 'Semester'})
-    
-    # וידוא שקיימות העמודות הקריטיות
+    # וידוא שקיימות העמודות הקריטיות (אחרי המרה לאנגלית)
     required = ['Year', 'Semester', 'שם קורס']
     missing = [col for col in required if col not in df_courses.columns]
     
     if missing:
-        # זה לא אמור לקרות בגלל הטעינה החכמה, אבל ליתר ביטחון
         st.error(f"חסרות עמודות קריטיות בקובץ הקורסים: {missing}")
         return False
 
@@ -269,4 +265,4 @@ def main_process(courses_file, avail_file):
         st.markdown("#### ❌ שגיאות שיבוץ (לא שובצו)")
         st.dataframe(errors)
         csv_err = errors.to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📥 הורד דוח ש
+        st.download_button("📥 הורד דוח שגיאות", csv_err, 'errors.csv', 'text/csv', key='dl-err')
