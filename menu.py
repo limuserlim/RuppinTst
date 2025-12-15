@@ -1,25 +1,30 @@
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+import streamlit as st
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-import streamlit as st
-import google.generativeai as genai
-import quest  # הקובץ השני
-import pandas as pd
+import re
+import importlib.util
+import sys
 import traceback
-import update_headers
+import quest          # בונה השאלונים
+import update_headers # עדכון כותרות
+
 # --- הגדרת העמוד ---
 st.set_page_config(page_title="מערכת ניהול רופין", page_icon="🎓", layout="centered")
 
+# ==========================================
+# פונקציות ליבה: קריאה מהמוח והרצה דינמית
+# ==========================================
 
 def get_brain_from_docs():
-    # 👇 כאן תדביקי את ה-ID שהעתקת בשלב 1
+    """מתחבר לגוגל דוקס ושואב את כל הטקסט"""
+    # ה-ID של המסמך שלך
     DOCUMENT_ID = '1zg7q93__eHUJ849z1Mi-JOJpS1ImqkeDdipMmTONUfM'
 
     try:
         # בדיקה שיש לנו את הסודות
         if "gcp_service_account" not in st.secrets:
-            st.error("❌ חסרים פרטי התחברות ב-secrets.toml")
-            return "הוראות ברירת מחדל: ענה בנימוס."
+            st.error("❌ חסרים פרטי התחברות (gcp_service_account) ב-secrets.toml")
+            return ""
 
         # התחברות לגוגל
         creds_dict = dict(st.secrets["gcp_service_account"])
@@ -33,7 +38,7 @@ def get_brain_from_docs():
         # קריאת המסמך
         document = service.documents().get(documentId=DOCUMENT_ID).execute()
         
-        # חילוץ הטקסט הנקי מתוך המבנה של גוגל (החלק הטריקי)
+        # חילוץ הטקסט הנקי
         full_text = ""
         content = document.get('body').get('content')
         for element in content:
@@ -47,150 +52,106 @@ def get_brain_from_docs():
 
     except Exception as e:
         st.error(f"שגיאה בקריאת ההוראות מהמסמך: {e}")
-        return "שגיאה בטעינת המוח."
+        return ""
 
-# --- הגדרת המוח של LOOZ ---
-def configure_gemini():
-    if "GOOGLE_API_KEY" not in st.secrets:
-        st.error("חסר מפתח GOOGLE_API_KEY")
-        return None
-    
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+def execute_code_from_brain(courses_file, avail_file):
+    """
+    1. קורא את הטקסט מהדוק
+    2. מוצא את קוד הפייתון בתוכו
+    3. מריץ אותו על הקבצים
+    """
 
-    # טעינת המוח
-    brain_instructions = get_brain_from_docs()
-    
-    config = {
-        "temperature": 0.0,
-        "top_p": 0.95,
-        "top_k": 40,
-        "max_output_tokens": 8192,
-    }
+    # 1. קריאת הטקסט
+    with st.spinner("🧠 יוצר קשר עם המוח (Google Docs)..."):
+        doc_content = get_brain_from_docs()
 
-    # הגדרות בטיחות אגרסיביות - מבטלות את כל החסימות
-    safety_settings = {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    }
+    if not doc_content:
+        return 
 
-    return genai.GenerativeModel(
-        model_name="models/gemini-flash-latest",
-        system_instruction=brain_instructions,
-        generation_config=config,
-        safety_settings=safety_settings
-    )# --- ממשק המשתמש ---
+    # 2. חילוץ קוד הפייתון (החלק החשוב שביקשת!)
+    # מחפש טקסט שנמצא בין ```python לבין ```
+    code_match = re.search(r'```python(.*?)```', doc_content, re.DOTALL)
+
+    if not code_match:
+        st.error("❌ שגיאה: המערכת לא מצאה קוד פייתון תקין במסמך המוח.")
+        st.warning("נא לוודא שבמסמך הגוגל דוק, הקוד עטוף ב- ```python בהתחלה ו- ``` בסוף.")
+        return
+
+    code_content = code_match.group(1)
+
+    # 3. שמירת הקוד לקובץ זמני מקומי
+    brain_filename = "dynamic_brain.py"
+    try:
+        with open(brain_filename, "w", encoding="utf-8") as f:
+            f.write(code_content)
+    except Exception as e:
+        st.error(f"שגיאה בשמירת קובץ המוח הזמני: {e}")
+        return
+
+    # 4. טעינה והרצה של הקוד החדש
+    try:
+        # טעינה דינמית - גורם לפייתון להכיר את הקובץ החדש שיצרנו
+        spec = importlib.util.spec_from_file_location("dynamic_brain", brain_filename)
+        dynamic_module = importlib.util.module_from_spec(spec)
+        sys.modules["dynamic_brain"] = dynamic_module
+        spec.loader.exec_module(dynamic_module)
+
+        # הרצת הפונקציה הראשית (main_process) שנמצאת בתוך הקוד במוח
+        st.toast("🚀 המוח נטען בהצלחה! מתחיל עיבוד...", icon="🤖")
+        
+        if hasattr(dynamic_module, 'main_process'):
+            # שליחת הקבצים למוח
+            dynamic_module.main_process(courses_file, avail_file)
+        else:
+            st.error("הקוד במוח תקין, אך חסרה בו הפונקציה 'main_process(courses, avail)'.")
+
+    except Exception as e:
+        st.error("💥 שגיאה בזמן הרצת הקוד מהמוח:")
+        st.code(str(e))
+        with st.expander("פרטי שגיאה מלאים (Traceback)"):
+            st.text(traceback.format_exc())
+
+# ==========================================
+# ממשק משתמש ראשי (GUI)
+# ==========================================
+
 st.title("🎓 מערכת ניהול מערכת שעות")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-action = st.radio("בחר פעולה:", ["בנה לי מערכת (LOOZ)", "בנה לי שאלון", "עדכן שמות שדות קובץ תשובות"], horizontal=True)
+# תפריט בחירה
+action = st.radio("בחר כלי לעבודה:", 
+                  ["בנה לי מערכת (LOOZ)", "בנה לי שאלון", "עדכן שמות שדות קובץ תשובות"], 
+                  horizontal=True)
 st.markdown("---")
 
-# === לוגיקה של LOOZ ===
+# --- אפשרות 1: מערכת שעות (LOOZ) ---
 if action == "בנה לי מערכת (LOOZ)":
     st.header("🤖 הבוט LOOZ")
-    st.info("ניתן להעלות קבצי Excel, PDF ותמונות.")
+    st.caption("המערכת מושכת את הלוגיקה העדכנית ביותר מגוגל דוקס בזמן אמת.")
     
-    with st.expander("📂 טעינת קבצים", expanded=(len(st.session_state.messages) == 0)):
-        uploaded_files = st.file_uploader(
-            "קבצי קלט", 
-            accept_multiple_files=True,
-            type=['pdf', 'csv', 'txt', 'png', 'jpg', 'xlsx']
-        )
-        user_notes = st.text_area("הערות:", "בנה מערכת לפי הקבצים.")
-        start_btn = st.button("התחל 🚀", type="primary")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### 1. קובץ קורסים")
+        courses_file = st.file_uploader("העלה קובץ (Excel/CSV)", type=['xlsx', 'csv'], key="courses")
+        
+    with col2:
+        st.markdown("### 2. קובץ זמינות")
+        avail_file = st.file_uploader("העלה קובץ (Excel/CSV)", type=['xlsx', 'csv'], key="avail")
 
-    if start_btn and uploaded_files:
-        model = configure_gemini()
-        if model:
-            # רשימת החלקים שתשלח לג'מיני
-            content_parts = [user_notes]
-            
-            for file in uploaded_files:
-                try:
-                    # === טיפול באקסל ===
-                    if file.name.endswith('.xlsx'):
-                        # המרה לטקסט (CSV)
-                        df = pd.read_excel(file)
-                        # המרה למחרוזת טקסט ארוכה
-                        csv_text = df.to_csv(index=False)
-                        
-                        # הוספה כטקסט רגיל (לא כקובץ!)
-                        content_parts.append(f"\n--- נתונים מקובץ אקסל: {file.name} ---\n{csv_text}\n")
-                        st.caption(f"✅ קובץ {file.name} עובד והומר לטקסט.")
-                    
-                    # === טיפול בקבצים אחרים (PDF/תמונות) ===
-                    elif file.type in ["application/pdf", "image/png", "image/jpeg", "image/jpg"]:
-                        content_parts.append({
-                            "mime_type": file.type,
-                            "data": file.getvalue()
-                        })
-                    
-                    # === טיפול בקבצי טקסט/CSV ===
-                    else:
-                        string_data = file.getvalue().decode("utf-8")
-                        content_parts.append(f"\n--- תוכן קובץ {file.name} ---\n{string_data}\n")
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # כפתור ההפעלה
+    if st.button("התחל בבניית המערכת 🚀", type="primary", use_container_width=True):
+        if courses_file and avail_file:
+            # קריאה לפונקציה שיצרנו למעלה
+            execute_code_from_brain(courses_file, avail_file)
+        else:
+            st.error("⚠️ עצור! חובה להעלות את שני הקבצים (קורסים וזמינות) לפני ההתחלה.")
 
-                except Exception as e:
-                    st.error(f"שגיאה בעיבוד הקובץ {file.name}: {e}")
-                    st.stop()
-
-            # שליחה לג'מיני
-            st.session_state.messages = [{"role": "user", "parts": content_parts, "display_text": user_notes}]
-            
-            with st.spinner("LOOZ מעבד את הנתונים..."):
-                try:
-                    response = model.generate_content(content_parts)
-                    st.session_state.messages.append({"role": "model", "parts": [response.text]})
-                    st.rerun() # רענון כדי להציג את התשובה מיד
-                except Exception as e:
-                    st.error(f"שגיאה בתקשורת עם גוגל: {str(e)}")
-
-    # הצגת היסטוריה
-    for msg in st.session_state.messages:
-        role = "user" if msg["role"] == "user" else "assistant"
-        with st.chat_message(role):
-            if "display_text" in msg:
-                st.write(msg["display_text"])
-                if role == "user": st.caption("📎 (קבצים צורפו ונוחתו)")
-            else:
-                st.write(msg["parts"][0])
-
-    # צ'אט המשך
-    if prompt := st.chat_input("תגובה לבוט..."):
-        st.session_state.messages.append({"role": "user", "parts": [prompt]})
-        with st.chat_message("user"):
-            st.write(prompt)
-
-        model = configure_gemini()
-        if model:
-            history = []
-            for m in st.session_state.messages:
-                # סינון שדות תצוגה
-                history.append({"role": m["role"], "parts": m["parts"]})
-            
-            with st.chat_message("assistant"):
-                with st.spinner("חושב..."):
-                    try:
-                        response = model.generate_content(history)
-                        st.write(response.text)
-                        st.session_state.messages.append({"role": "model", "parts": [response.text]})
-                    except Exception as e:
-                        st.error(f"שגיאה: {e}")
-
+# --- אפשרות 2: שאלון ---
 elif action == "בנה לי שאלון":
     quest.run()
+
+# --- אפשרות 3: עדכון כותרות ---
 elif action == "עדכן שמות שדות קובץ תשובות":
     update_headers.run()
-
-
-
-
-
-
-
-
-
