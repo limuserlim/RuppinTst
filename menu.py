@@ -1,3 +1,4 @@
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import streamlit as st
@@ -56,33 +57,30 @@ def configure_gemini():
     
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-    # טעינת המוח מהדוקס
+    # טעינת המוח
     brain_instructions = get_brain_from_docs()
     
-    # הגדרות יצירתיות
     config = {
-        "temperature": 0.0, # דיוק מקסימלי
+        "temperature": 0.0,
         "top_p": 0.95,
         "top_k": 40,
         "max_output_tokens": 8192,
     }
 
-    # --- התיקון: ביטול מסנני הבטיחות ---
-    # זה מונע את שגיאה finish_reason 2
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
+    # הגדרות בטיחות אגרסיביות - מבטלות את כל החסימות
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
 
     return genai.GenerativeModel(
-        model_name="models/gemini-flash-latest", 
+        model_name="gemini-1.5-flash", 
         system_instruction=brain_instructions,
         generation_config=config,
-        safety_settings=safety_settings # הוספנו את זה כאן
-    )
-# --- ממשק המשתמש ---
+        safety_settings=safety_settings
+    )# --- ממשק המשתמש ---
 st.title("🎓 מערכת ניהול מערכת שעות")
 
 if "messages" not in st.session_state:
@@ -187,6 +185,7 @@ elif action == "בנה לי שאלון":
     quest.run()
 elif action == "עדכן שמות שדות קובץ תשובות":
     update_headers.run()
+
 
 
 
