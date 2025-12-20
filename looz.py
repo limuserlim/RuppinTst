@@ -140,7 +140,7 @@ def attempt_schedule(df_courses, lecturer_availability):
             grid_student[(y, s)] = {d: set() for d in range(1,7)}
 
     # ==========================================
-    # מנגנון הריגול (DEBUG MODE) - הופעל מחדש
+    # מנגנון הריגול (DEBUG MODE) - פעיל!
     # ==========================================
     TARGET_LECTURER = "תמר בראל יניר"  # השם החשוד
 
