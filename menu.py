@@ -26,6 +26,11 @@ if action == "בנה לי מערכת (LOOZ)":
     st.header("🤖 הבוט LOOZ")
     st.caption("המערכת מריצה את הלוגיקה המקומית (קובץ looz.py).")
     
+    # === תוספת: בחירת עוצמת אופטימיזציה ===
+    iterations = st.slider("מספר איטרציות לאופטימיזציה", 
+                           min_value=1, max_value=100, value=30, 
+                           help="מספר גבוה יותר ייתן תוצאה טובה יותר אך ירוץ לאט יותר.")
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -52,13 +57,14 @@ if action == "בנה לי מערכת (LOOZ)":
                 importlib.reload(looz)
                 status_box.info("✅ המוח נטען בהצלחה. מעבד נתונים...")
                 
-                # 2. איפוס קבצים
+                # 2. איפוס קבצים (חשוב בגלל שימוש חוזר בסטרים)
                 courses_file.seek(0)
                 avail_file.seek(0)
                 
                 # 3. הרצת המוח עם ספינר
                 with st.spinner("🤖 המוח עובד... נא להמתין"):
-                    looz.main_process(courses_file, avail_file)
+                    # === התיקון הקריטי כאן: העברת iterations ===
+                    looz.main_process(courses_file, avail_file, iterations)
                 
                 # 4. הודעת סיום
                 status_box.success("🏁 התהליך הסתיים! (גלול למטה לתוצאות)")
@@ -72,7 +78,6 @@ if action == "בנה לי מערכת (LOOZ)":
 
 # --- אפשרות 2: שאלון ---
 elif action == "בנה לי שאלון":
-    # ניתן לוודא שהמודול נטען
     if 'quest' in sys.modules: 
         quest.run()
     else:
@@ -86,6 +91,6 @@ elif action == "עדכן שמות שדות קובץ תשובות":
     else:
         st.error("המודול 'update_headers' אינו זמין.")
 
-# --- מקרה ברירת מחדל (אף אפשרות לא נבחרה בהתחלה) ---
+# --- מקרה ברירת מחדל ---
 elif action is None:
     st.info("⬆️ אנא בחר אחת מהאפשרויות למעלה כדי להתחיל לעבוד.")
