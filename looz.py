@@ -1,7 +1,28 @@
+import sys
+import subprocess
+import streamlit as st
 import pandas as pd
 import numpy as np
-import streamlit as st
 import io
+
+# ================= AUTO INSTALLER =================
+# בדיקה והתקנה אוטומטית של ספריות ה-AI הנדרשות
+try:
+    from pandasai import SmartDataframe
+    from pandasai.llm import GoogleGemini
+    import matplotlib.pyplot as plt
+except ImportError:
+    st.warning("🔄 מתקין ספריות AI חסרות (תהליך חד פעמי)...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pandasai", "google-generativeai", "matplotlib"])
+        from pandasai import SmartDataframe
+        from pandasai.llm import GoogleGemini
+        import matplotlib.pyplot as plt
+        st.success("✅ ההתקנה הסתיימה! טוען את המערכת...")
+        st.rerun()
+    except Exception as e:
+        st.error(f"❌ שגיאה בהתקנה אוטומטית: {e}")
+        st.stop()
 
 # ================= CONFIGURATION =================
 
@@ -97,7 +118,7 @@ def process_availability_multi_semester(df_avail):
             df_avail[time_col] = pd.to_datetime(df_avail[time_col], dayfirst=True, errors='coerce')
             df_avail = df_avail.sort_values(by=time_col) # מיון מהישן לחדש
         except:
-            pass # אם ההמרה נכשלה, מסתמכים על סדר השורות המקורי (באקסל שורה תחתונה היא בדרך כלל חדשה יותר)
+            pass # אם ההמרה נכשלה, מסתמכים על סדר השורות המקורי
 
     # מחיקת כפילויות - משאירים תמיד את השורה האחרונה (keep='last')
     original_count = len(df_avail)
@@ -107,7 +128,7 @@ def process_availability_multi_semester(df_avail):
     if original_count > final_count:
         st.toast(f"🧹 הוסרו {original_count - final_count} רשומות כפולות (נשמרו העדכניות ביותר).")
 
-    # 3. בניית המילון (כמו קודם)
+    # 3. בניית המילון
     for index, row in df_avail.iterrows():
         lecturer = row['clean_name']
         lecturer_availability[lecturer] = {}
@@ -358,6 +379,42 @@ def main_process(courses_file, avail_file, iterations=30):
         st.error("קורסים שלא שובצו:")
         st.dataframe(errors)
         st.download_button("📥 הורד דוח שגיאות (CSV)", errors.to_csv(index=False).encode('utf-8-sig'), "errors.csv")
+
+    # ================= 6. GEMINI CHAT BOT =================
+    st.markdown("---")
+    st.header("🤖 המעבדה: דבר עם המערכת")
+    st.caption("כאן ניתן לבצע בדיקות What-if ושאילתות חכמות.")
+
+    # בדיקה אוטומטית ב-Secrets
+    api_key = None
+    if 'GOOGLE_API_KEY' in st.secrets:
+        api_key = st.secrets['GOOGLE_API_KEY']
+    else:
+        api_key = st.text_input("הכנס מפתח Google Gemini API:", type="password", help="לא נמצא ב-Secrets")
+
+    if api_key and not final.empty:
+        try:
+            llm = GoogleGemini(api_key=api_key)
+            df_dict = {"Schedule": final, "Errors": errors}
+            sdf = SmartDataframe(df_dict, config={"llm": llm})
+
+            query = st.text_area("מה ברצונך לשאול או לשנות?", placeholder="דוגמה: האם כיתה 'זום' פנויה ביום שלישי ב-10? או: צור גרף עמודות של שעות לכל מרצה.")
+            
+            if st.button("שלח ל-Gemini 🚀"):
+                with st.spinner("Gemini מנתח את הבקשה..."):
+                    response = sdf.chat(query)
+                    
+                    st.write("### 💡 התשובה של Gemini:")
+                    if isinstance(response, pd.DataFrame):
+                        st.dataframe(response)
+                        st.info("הערה: טבלה זו היא תוצאה של השאילתה בלבד ואינה נשמרת אוטומטית לקובץ הראשי.")
+                    elif isinstance(response, str) and response.endswith('.png'):
+                        st.image(response)
+                    else:
+                        st.write(response)
+
+        except Exception as e:
+            st.error(f"שגיאה בהתחברות ל-Gemini: {e}")
 
 if __name__ == "__main__":
     st.title("Looz Standalone Mode")
