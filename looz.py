@@ -5,23 +5,19 @@ import io
 
 # ================= CONFIGURATION =================
 
-# 1. מיפוי שמות קשיח
 HARDCODED_MAPPING = {
     'מתרגל': 'נועה גינו',
     'אורנה גרופינקל קולמן': 'אורנה גורפינקל קולמן'
 }
 
-# 2. מיפוי סמסטרים
 SEMESTER_MAP = {
     'א': 1, 'ב': 2, 'ג': 3, 'ד': 4,
     'a': 1, 'b': 2, 'c': 3, 'd': 4, 
     1: 1, 2: 2, 3: 3, 4: 4 
 }
 
-# טווח שעות
 HOURS_RANGE = range(8, 22)
 
-# מילות מפתח
 KEYWORDS_COURSES = ['שם קורס', 'שם הקורס', 'Course Name']
 KEYWORDS_AVAIL = ['שם מלא', 'שם מרצה', 'שם המרצה']
 
@@ -127,7 +123,7 @@ def resolve_lecturer_names(df_courses, avail_lecturer_names):
 
 # ================= 3. SCHEDULING ENGINE =================
 
-def attempt_schedule(df_courses, lecturer_availability):
+def attempt_schedule(df_courses, lecturer_availability, debug_mode=False):
     schedule = []
     unscheduled = []
     years = df_courses['Year'].unique()
@@ -140,49 +136,50 @@ def attempt_schedule(df_courses, lecturer_availability):
             grid_student[(y, s)] = {d: set() for d in range(1,7)}
 
     # ==========================================
-    # מנגנון הריגול (DEBUG MODE) - פעיל!
+    # מנגנון הריגול (מוצג למסך)
     # ==========================================
-    TARGET_LECTURER = "תמר בראל יניר"  # השם החשוד
+    TARGET_KEYWORD = "תמר"  # שם חלקי לחיפוש
 
     def is_slot_free(lecturer, year, semester, day, start, duration, is_zoom=False):
-        # האם זה המרצה שאנחנו מחפשים?
-        is_target = (TARGET_LECTURER in str(lecturer))
+        # בדיקה האם המרצה מכיל את השם "תמר"
+        is_target = (TARGET_KEYWORD in str(lecturer))
         
-        # הדפסת לוג רק אם זה המרצה החשוד, ורק ביום שלישי (3)
-        if is_target and day == 3:
-            print(f"\n🔍 DEBUG: בודק את {lecturer} | יום: {day} | שעה: {start}")
-
         if start + duration > 22: return False
         
         # 1. שליפת זמינות
         lect_sem_data = lecturer_availability.get(lecturer, {}).get(semester, {})
         lect_slots = lect_sem_data.get(day, set())
         
-        # === הדפסת הזמינות שהמערכת רואה ===
-        if is_target and day == 3:
-            print(f"   --> שעות פנויות ברשימה (סמסטר {semester}): {sorted(list(lect_slots))}")
+        # הדפסה למסך (רק אם אנחנו במצב דיבאג וזה המרצה המבוקש)
+        if debug_mode and is_target:
+            st.write(f"🔍 **בודק את {lecturer}:** יום {day}, שעה {start}, סמסטר {semester}")
+            st.write(f"&nbsp;&nbsp;&nbsp;&nbsp;🕒 שעות זמינות בקובץ: {sorted(list(lect_slots))}")
             if start in lect_slots:
-                print(f"   --> ✅ השעה {start} נמצאת ברשימה!")
+                st.write(f"&nbsp;&nbsp;&nbsp;&nbsp;✅ המרצה זמין בשעה {start}")
             else:
-                print(f"   --> ❌ השעה {start} חסרה.")
-        # ==================================
+                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ <span style='color:red'>המרצה לא זמין בשעה {start}</span>", unsafe_allow_html=True)
 
         needed = set(range(start, start + duration))
         if not needed.issubset(lect_slots): return False
 
         # 2. בדיקת חפיפות
         for h in range(start, start + duration):
-            if h in grid_lecturer.get(lecturer, {}).get(day, set()): return False
-            if h in grid_student.get((year, semester), {}).get(day, set()): return False
+            if h in grid_lecturer.get(lecturer, {}).get(day, set()): 
+                if debug_mode and is_target: st.write(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ התנגשות: המרצה כבר מלמד בשעה {h}")
+                return False
+            if h in grid_student.get((year, semester), {}).get(day, set()): 
+                if debug_mode and is_target: st.write(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ התנגשות: הסטודנטים תפוסים בשעה {h}")
+                return False
             
         if is_zoom:
             gap_start = max(8, start - 2)
             for h in range(gap_start, start):
                 if h in grid_student.get((year, semester), {}).get(day, set()):
+                    if debug_mode and is_target: st.write(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ התנגשות: אין גאפ נסיעה לזום")
                     return False
         
-        if is_target and day == 3:
-            print(f"   --> ✅ השיבוץ אושר סופית לשעה {start}")
+        if debug_mode and is_target:
+            st.success(f"✅ השיבוץ אושר עבור {lecturer} ביום {day} שעה {start}!")
             
         return True
 
@@ -283,8 +280,14 @@ def optimize_schedule(df_courses, lecturer_availability, iterations=30):
     
     prog_bar = st.progress(0)
     
+    # אזור הדיבאג בדפדפן
+    debug_expander = st.expander("🕵️ דוח חקירה בזמן אמת (עבור 'תמר')", expanded=True)
+
     for i in range(iterations):
         prog_bar.progress((i + 1) / iterations)
+        
+        # מפעילים דיבאג ויזואלי רק באיטרציה הראשונה כדי לא להציף את המסך
+        is_first_run = (i == 0)
         
         df_courses['Rnd'] = np.random.rand(len(df_courses))
         df_sorted = df_courses.sort_values(
@@ -292,7 +295,11 @@ def optimize_schedule(df_courses, lecturer_availability, iterations=30):
             ascending=[False, False, False, True, False, False]
         )
         
-        sched, unsched = attempt_schedule(df_sorted, lecturer_availability)
+        if is_first_run:
+            with debug_expander:
+                sched, unsched = attempt_schedule(df_sorted, lecturer_availability, debug_mode=True)
+        else:
+            sched, unsched = attempt_schedule(df_sorted, lecturer_availability, debug_mode=False)
         
         if len(unsched) < min_errors:
             min_errors = len(unsched)
@@ -306,9 +313,6 @@ def optimize_schedule(df_courses, lecturer_availability, iterations=30):
 # ================= 5. MAIN PROCESS (API) =================
 
 def main_process(courses_file, avail_file, iterations=30):
-    """
-    נקודת הכניסה הראשית.
-    """
     # 1. טעינה
     df_courses, e1 = smart_load_dataframe(courses_file, 'courses')
     df_avail, e2 = smart_load_dataframe(avail_file, 'avail')
@@ -340,7 +344,6 @@ def main_process(courses_file, avail_file, iterations=30):
     avail_names = list(lect_avail.keys())
     df_courses = resolve_lecturer_names(df_courses, avail_names)
 
-    # סינון מרצים חסרים
     all_lects = set(df_courses['מרצה'].dropna().unique())
     existing = set(avail_names)
     missing = all_lects - existing
@@ -349,7 +352,7 @@ def main_process(courses_file, avail_file, iterations=30):
         df_courses = df_courses[df_courses['מרצה'].isin(existing)]
 
     # 4. הרצת אופטימיזציה
-    st.info(f"מריץ {iterations} איטרציות למציאת הפתרון הטוב ביותר...")
+    st.info(f"מריץ {iterations} איטרציות...")
     final, errors = optimize_schedule(df_courses, lect_avail, iterations)
 
     # 5. הצגת תוצאות
@@ -370,4 +373,4 @@ if __name__ == "__main__":
     f2 = st.file_uploader("Avail")
     if f1 and f2:
         if st.button("Run"):
-            main_process(f1, f2, 30)
+            main_process(f1, f2, 1)
