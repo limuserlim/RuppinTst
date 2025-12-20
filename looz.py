@@ -1,28 +1,10 @@
-import sys
-import subprocess
 import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-
-# ================= AUTO INSTALLER =================
-# בדיקה והתקנה אוטומטית של ספריות ה-AI הנדרשות
-try:
-    from pandasai import SmartDataframe
-    from pandasai.llm import GoogleGemini
-    import matplotlib.pyplot as plt
-except ImportError:
-    st.warning("🔄 מתקין ספריות AI חסרות (תהליך חד פעמי)...")
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "pandasai", "google-generativeai", "matplotlib"])
-        from pandasai import SmartDataframe
-        from pandasai.llm import GoogleGemini
-        import matplotlib.pyplot as plt
-        st.success("✅ ההתקנה הסתיימה! טוען את המערכת...")
-        st.rerun()
-    except Exception as e:
-        st.error(f"❌ שגיאה בהתקנה אוטומטית: {e}")
-        st.stop()
+import matplotlib.pyplot as plt
+from pandasai import SmartDataframe
+from pandasai.llm import GoogleGemini
 
 # ================= CONFIGURATION =================
 
