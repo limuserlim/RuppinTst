@@ -139,24 +139,55 @@ def attempt_schedule(df_courses, lecturer_availability):
         for s in semesters:
             grid_student[(y, s)] = {d: set() for d in range(1,7)}
 
+    # === הדבק את זה בתוך attempt_schedule במקום הפונקציה הקודמת ===
+    
+    # הגדר כאן את שם המרצה שאתה רוצה "לרגיל" אחריו כדי להבין למה הוא לא משובץ
+    TARGET_LECTURER = "גיורא רוכמן" 
+    
     def is_slot_free(lecturer, year, semester, day, start, duration, is_zoom=False):
-        if start + duration > 22: return False
+        # האם אנחנו במצב "ריגול"?
+        debug = (lecturer == TARGET_LECTURER)
         
+        if start + duration > 22: 
+            if debug: print(f"[DEBUG] {day}/{start}: נפסל - חריגה משעות (אחרי 22:00)")
+            return False
+        
+        # 1. שליפת זמינות
+        # שים לב להדפסה כאן - היא תגלה אם הסמסטר לא נקלט נכון
         lect_sem_data = lecturer_availability.get(lecturer, {}).get(semester, {})
+        
+        if debug and not lect_sem_data:
+            print(f"[DEBUG] {day}/{start}: נפסל - אין נתוני זמינות למרצה בסמסטר {semester}!")
+            # הדפסת עזר: מה כן יש למרצה הזה?
+            print(f"   -> זמין בסמסטרים: {list(lecturer_availability.get(lecturer, {}).keys())}")
+            return False
+
         lect_slots = lect_sem_data.get(day, set())
         
         needed = set(range(start, start + duration))
-        if not needed.issubset(lect_slots): return False
+        if not needed.issubset(lect_slots): 
+            if debug: print(f"[DEBUG] {day}/{start}: נפסל - המרצה לא זמין. צריך {needed}, יש {lect_slots}")
+            return False
 
+        # 2. בדיקת חפיפות בגריד
         for h in range(start, start + duration):
-            if h in grid_lecturer.get(lecturer, {}).get(day, set()): return False
-            if h in grid_student.get((year, semester), {}).get(day, set()): return False
+            if h in grid_lecturer.get(lecturer, {}).get(day, set()): 
+                if debug: print(f"[DEBUG] {day}/{start}: נפסל - המרצה כבר מלמד בשעה {h}")
+                return False
             
+            if h in grid_student.get((year, semester), {}).get(day, set()): 
+                if debug: print(f"[DEBUG] {day}/{start}: נפסל - הסטודנטים ({year}, סמסטר {semester}) תפוסים בשעה {h}")
+                return False
+            
+        # 3. לוגיקת זום
         if is_zoom:
             gap_start = max(8, start - 2)
             for h in range(gap_start, start):
                 if h in grid_student.get((year, semester), {}).get(day, set()):
+                    if debug: print(f"[DEBUG] {day}/{start}: נפסל (זום) - אין גאפ נסיעה בשעה {h}")
                     return False
+        
+        if debug: print(f"[DEBUG] {day}/{start}: ✅ משבצת תקינה!")
         return True
 
     def book_slot(lecturer, year, semester, day, start, duration, course_name, space_type):
@@ -342,3 +373,4 @@ if __name__ == "__main__":
     if f1 and f2:
         if st.button("Run"):
             main_process(f1, f2, 30)
+
