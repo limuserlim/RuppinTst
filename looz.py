@@ -90,11 +90,13 @@ def process_availability_multi_semester(df_avail):
         
         for col_name in df_avail.columns:
             col_str = str(col_name).strip()
+            # זיהוי פורמט XY (ספרה ליום, ספרה לסמסטר)
             if len(col_str) == 2 and col_str.isdigit():
                 day_digit = int(col_str[0])
                 sem_digit = int(col_str[1])
                 
                 if day_digit not in range(1, 7): continue
+                
                 if sem_digit not in lecturer_availability[lecturer]:
                     lecturer_availability[lecturer][sem_digit] = {d: set() for d in range(1, 7)}
                 
@@ -132,6 +134,7 @@ def attempt_schedule(df_courses, lecturer_availability):
     unscheduled = []
     years = df_courses['Year'].unique()
     semesters = df_courses['Semester'].unique()
+    
     grid_student = {} 
     grid_lecturer = {l: {d: set() for d in range(1,7)} for l in lecturer_availability}
 
@@ -139,55 +142,27 @@ def attempt_schedule(df_courses, lecturer_availability):
         for s in semesters:
             grid_student[(y, s)] = {d: set() for d in range(1,7)}
 
-    # === הדבק את זה בתוך attempt_schedule במקום הפונקציה הקודמת ===
-    
-    # הגדר כאן את שם המרצה שאתה רוצה "לרגיל" אחריו כדי להבין למה הוא לא משובץ
-    TARGET_LECTURER = "גיורא רוכמן" 
-    
     def is_slot_free(lecturer, year, semester, day, start, duration, is_zoom=False):
-        # האם אנחנו במצב "ריגול"?
-        debug = (lecturer == TARGET_LECTURER)
+        if start + duration > 22: return False
         
-        if start + duration > 22: 
-            if debug: print(f"[DEBUG] {day}/{start}: נפסל - חריגה משעות (אחרי 22:00)")
-            return False
-        
-        # 1. שליפת זמינות
-        # שים לב להדפסה כאן - היא תגלה אם הסמסטר לא נקלט נכון
+        # 1. שליפת זמינות לפי סמסטר
         lect_sem_data = lecturer_availability.get(lecturer, {}).get(semester, {})
-        
-        if debug and not lect_sem_data:
-            print(f"[DEBUG] {day}/{start}: נפסל - אין נתוני זמינות למרצה בסמסטר {semester}!")
-            # הדפסת עזר: מה כן יש למרצה הזה?
-            print(f"   -> זמין בסמסטרים: {list(lecturer_availability.get(lecturer, {}).keys())}")
-            return False
-
         lect_slots = lect_sem_data.get(day, set())
         
         needed = set(range(start, start + duration))
-        if not needed.issubset(lect_slots): 
-            if debug: print(f"[DEBUG] {day}/{start}: נפסל - המרצה לא זמין. צריך {needed}, יש {lect_slots}")
-            return False
+        if not needed.issubset(lect_slots): return False
 
-        # 2. בדיקת חפיפות בגריד
+        # 2. בדיקת חפיפות
         for h in range(start, start + duration):
-            if h in grid_lecturer.get(lecturer, {}).get(day, set()): 
-                if debug: print(f"[DEBUG] {day}/{start}: נפסל - המרצה כבר מלמד בשעה {h}")
-                return False
+            if h in grid_lecturer.get(lecturer, {}).get(day, set()): return False
+            if h in grid_student.get((year, semester), {}).get(day, set()): return False
             
-            if h in grid_student.get((year, semester), {}).get(day, set()): 
-                if debug: print(f"[DEBUG] {day}/{start}: נפסל - הסטודנטים ({year}, סמסטר {semester}) תפוסים בשעה {h}")
-                return False
-            
-        # 3. לוגיקת זום
+        # 3. זום - בדיקת גאפ
         if is_zoom:
             gap_start = max(8, start - 2)
             for h in range(gap_start, start):
                 if h in grid_student.get((year, semester), {}).get(day, set()):
-                    if debug: print(f"[DEBUG] {day}/{start}: נפסל (זום) - אין גאפ נסיעה בשעה {h}")
                     return False
-        
-        if debug: print(f"[DEBUG] {day}/{start}: ✅ משבצת תקינה!")
         return True
 
     def book_slot(lecturer, year, semester, day, start, duration, course_name, space_type):
@@ -202,9 +177,11 @@ def attempt_schedule(df_courses, lecturer_availability):
             'Space': space_type, 'EndHour': start + duration
         })
 
+    # הפרדה לקבוצות (Links) ולבודדים
     groups = df_courses[df_courses['קישור'].notna()]
     singles = df_courses[df_courses['קישור'].isna()]
 
+    # --- שיבוץ קבוצות ---
     for lid in groups['קישור'].unique():
         grp = groups[groups['קישור'] == lid]
         duration = int(grp.iloc[0]['שעות'])
@@ -229,8 +206,9 @@ def attempt_schedule(df_courses, lecturer_availability):
         
         if not assigned:
             for _, row in grp.iterrows():
-                unscheduled.append({'Course': row['שם קורס'], 'Lecturer': row['מרצה'], 'Reason': 'בעיה בשיבוץ קבוצות מקבילות'})
+                unscheduled.append({'Course': row['שם קורס'], 'Lecturer': row['מרצה'], 'Reason': 'Link Conflict'})
 
+    # --- שיבוץ בודדים ---
     for _, row in singles.iterrows():
         lect, course, duration = row['מרצה'], row['שם קורס'], int(row['שעות'])
         year, sem = row['Year'], row['Semester']
@@ -241,6 +219,7 @@ def attempt_schedule(df_courses, lecturer_availability):
         
         search_hours = list(HOURS_RANGE)
         if is_zoom: search_hours.reverse()
+        
         days_check = [int(fixed_day)] if pd.notna(fixed_day) else range(1, 6)
         
         assigned = False
@@ -259,7 +238,7 @@ def attempt_schedule(df_courses, lecturer_availability):
                 if assigned: break
         
         if not assigned:
-            unscheduled.append({'Course': course, 'Lecturer': lect, 'Reason': 'לא נמצא מועד מתאים'})
+            unscheduled.append({'Course': course, 'Lecturer': lect, 'Reason': 'No Slot Found'})
 
     return pd.DataFrame(schedule), pd.DataFrame(unscheduled)
 
@@ -282,7 +261,6 @@ def optimize_schedule(df_courses, lecturer_availability, iterations=30):
     best_unscheduled = pd.DataFrame()
     min_errors = float('inf')
     
-    # בדיקת קיום סשן (רק אם רץ בסטרימליט)
     prog_bar = st.progress(0)
     
     for i in range(iterations):
@@ -326,7 +304,7 @@ def main_process(courses_file, avail_file, iterations=30):
     if 'שנה' in df_courses.columns: df_courses.rename(columns={'שנה': 'Year'}, inplace=True)
     if 'סמסטר' in df_courses.columns: df_courses.rename(columns={'סמסטר': 'Semester'}, inplace=True)
     
-    # המרת סמסטרים למספרים
+    # המרת סמסטרים למספרים (כולל Lowercase למניעת בעיות אותיות)
     df_courses['Semester'] = df_courses['Semester'].astype(str).str.lower().replace(SEMESTER_MAP)
     df_courses['Semester'] = pd.to_numeric(df_courses['Semester'], errors='coerce').fillna(0).astype(int)
 
@@ -373,4 +351,3 @@ if __name__ == "__main__":
     if f1 and f2:
         if st.button("Run"):
             main_process(f1, f2, 30)
-
