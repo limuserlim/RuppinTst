@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 import traceback
+import time
 
 # --- בדיקת ספריית ג'מיני ---
 try:
@@ -220,17 +221,16 @@ class Scheduler:
         for item in group:
             self.errors.append({'Course': item.get('Course'), 'Lecturer': item.get('Lecturer'), 'Reason': reason, 'LinkID': item.get('LinkID')})
 
-# ================= 4. CHAT FUNCTIONS (Dynamic + Safety Fix) =================
+# ================= 4. CHAT FUNCTIONS (Strict Model) =================
 
 def init_chat_session(schedule_df, errors_df, api_key):
-    """Initializes chat by dynamically finding models and disabling safety filters."""
+    """Initializes chat by FORCING gemini-1.5-flash to avoid 429 quota issues."""
     if not HAS_GENAI or not api_key: return None
     
     genai.configure(api_key=api_key)
     generation_config = genai.types.GenerationConfig(temperature=0.0)
     
-    # === 1. הגדרות בטיחות (חשוב! מונע חסימות שווא) ===
-    # אנחנו מבטלים את החסימות כי אנחנו שולחים נתונים טבלאיים שיכולים להיחשד בטעות
+    # הגדרות בטיחות מחמירות פחות כדי לאפשר עיבוד נתונים
     safety_settings = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -238,37 +238,6 @@ def init_chat_session(schedule_df, errors_df, api_key):
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     ]
 
-    # === 2. בחירת מודל ===
-    chosen_model = None
-    try:
-        # קבלת מודלים זמינים
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        # סדר עדיפויות
-        priorities = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-1.0-pro']
-        
-        for p in priorities:
-            for av in available_models:
-                if p in av:
-                    chosen_model = av
-                    break
-            if chosen_model: break
-            
-        # ברירת מחדל
-        if not chosen_model and available_models:
-            chosen_model = available_models[0]
-            
-    except Exception as e:
-        print(f"DEBUG: Model list failed: {e}")
-        chosen_model = 'models/gemini-pro'
-
-    if not chosen_model:
-        return None
-        
-    with st.sidebar:
-        st.caption(f"🤖 Model: {chosen_model.replace('models/', '')}")
-
-    # === 3. יצירת הצ'אט ===
     csv_sched = schedule_df.to_csv(index=False)
     csv_errors = errors_df.to_csv(index=False)
     
@@ -281,11 +250,14 @@ def init_chat_session(schedule_df, errors_df, api_key):
     {csv_errors}
     Answer ONLY based on this data. Use Hebrew.
     """
-    
+
+    # אכיפת המודל הכי יציב וחינמי בלבד
+    forced_model = "gemini-1.5-flash"
+
     try:
-        # הוספנו את safety_settings לקריאה
-        model = genai.GenerativeModel(chosen_model, generation_config=generation_config, safety_settings=safety_settings)
-        return model.start_chat(history=[{"role": "user", "parts": prompt}, {"role": "model", "parts": "אני כאן."}])
+        model = genai.GenerativeModel(forced_model, generation_config=generation_config, safety_settings=safety_settings)
+        # התחלת שיחה עם היסטוריה ראשונית
+        return model.start_chat(history=[{"role": "user", "parts": prompt}, {"role": "model", "parts": "שלום, אני מנתח הנתונים. כיצד אוכל לעזור?"}])
     except Exception as e:
         st.error(f"Chat Init Error: {e}")
         return None
@@ -301,16 +273,16 @@ def main_process(courses_file, avail_file, iterations=30):
         api_key = st.secrets["GOOGLE_API_KEY"]
     
     with st.sidebar:
-        st.header("🤖 Chat Settings")
+        st.header("🤖 הגדרות צ'אט")
         if not HAS_GENAI:
             st.warning("Chat library missing.")
         elif api_key:
-            st.success("✅ API Key loaded")
+            st.success("✅ מפתח API נטען")
         else:
             api_key = st.text_input("Google API Key", type="password")
 
     st.write("---")
-    st.info("🔄 Loading Data...")
+    st.info("🔄 טוען נתונים...")
     
     try:
         c_raw = load_uploaded_file(courses_file)
@@ -331,14 +303,14 @@ def main_process(courses_file, avail_file, iterations=30):
         
         if not mask.all():
             missing = courses[~mask]['Lecturer'].unique()
-            st.warning(f"⚠️ {len(missing)} lecturers missing availability (e.g. {missing[:3]})")
+            st.warning(f"⚠️ {len(missing)} מרצים חסרים בקובץ הזמינות.")
             
         final_courses = courses[mask].copy()
         if final_courses.empty:
-            st.error("No courses to schedule (0 matches).")
+            st.error("אין קורסים לשיבוץ.")
             return
 
-        st.success(f"✅ Scheduling ({iterations} iterations)...")
+        st.success(f"✅ מבצע שיבוץ ({iterations} איטרציות)...")
         best_sched = pd.DataFrame(); best_errors = pd.DataFrame(); min_errors = float('inf')
         bar = st.progress(0)
         
@@ -357,60 +329,56 @@ def main_process(courses_file, avail_file, iterations=30):
         st.divider()
         c1, c2 = st.columns(2)
         unique_sched = len(best_sched.drop_duplicates(subset=['Course', 'Lecturer'])) if not best_sched.empty else 0
-        c1.metric("✅ Scheduled", unique_sched)
-        c2.metric("❌ Failed", len(best_errors), delta_color="inverse")
+        c1.metric("✅ שובצו", unique_sched)
+        c2.metric("❌ נכשלו", len(best_errors), delta_color="inverse")
         
         if not best_sched.empty:
             st.dataframe(best_sched)
-            st.download_button("📥 Download Schedule", best_sched.to_csv(index=False).encode('utf-8-sig'), "schedule.csv")
+            st.download_button("📥 הורד מערכת", best_sched.to_csv(index=False).encode('utf-8-sig'), "schedule.csv")
             
         if not best_errors.empty:
-            st.error("Errors:")
+            st.error("פירוט שגיאות:")
             st.dataframe(best_errors)
-            st.download_button("⚠️ Download Errors", best_errors.to_csv(index=False).encode('utf-8-sig'), "errors.csv")
+            st.download_button("⚠️ הורד קובץ שגיאות", best_errors.to_csv(index=False).encode('utf-8-sig'), "errors.csv")
 
         # === שלב 2: צ'אט ===
         st.divider()
-        st.subheader("💬 Result Analysis (AI)")
+        st.subheader("💬 ניתוח תוצאות עם בינה מלאכותית")
 
-        try:
-            if not HAS_GENAI:
-                st.info("הצ'אט אינו זמין (חסרה ספרייה).")
-            elif not api_key:
-                st.info("הצ'אט אינו זמין (חסר מפתח API).")
+        if not HAS_GENAI:
+            st.info("הצ'אט אינו זמין כרגע.")
+        elif not api_key:
+            st.info("אנא הזן מפתח API כדי לשוחח עם הנתונים.")
+        else:
+            # אתחול ה-Session State לצ'אט
+            if "gemini_chat" not in st.session_state:
+                st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
+                st.session_state.chat_history = []
+            
+            if st.session_state.gemini_chat is None:
+                st.error("לא ניתן היה לאתחל את הצ'אט. וודא שהמפתח תקין.")
             else:
-                # אתחול צ'אט
-                if "gemini_chat" not in st.session_state:
-                    st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
-                    st.session_state.chat_history = []
-                
-                # בדיקה אם האתחול הצליח
-                if st.session_state.gemini_chat is None:
-                    st.error("❌ תקלה באתחול הצ'אט (מודל לא נמצא או בעיית הרשאות).")
-                else:
-                    # רענון מפתח
-                    if "last_key" not in st.session_state or st.session_state.last_key != api_key:
-                        st.session_state.last_key = api_key
-                        st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
-                        st.session_state.chat_history = []
+                # הצגת היסטוריית השיחה
+                for msg in st.session_state.chat_history:
+                    with st.chat_message(msg["role"]):
+                        st.markdown(msg["content"])
 
-                    for msg in st.session_state.chat_history:
-                        st.chat_message(msg["role"]).write(msg["content"])
-
-                    if prompt := st.chat_input("Ask about the schedule..."):
-                        st.session_state.chat_history.append({"role": "user", "content": prompt})
-                        st.chat_message("user").write(prompt)
-                        
-                        try:
+                if prompt := st.chat_input("שאל אותי על תוצאות השיבוץ..."):
+                    st.session_state.chat_history.append({"role": "user", "content": prompt})
+                    with st.chat_message("user"):
+                        st.markdown(prompt)
+                    
+                    try:
+                        with st.spinner("חושב..."):
                             resp = st.session_state.gemini_chat.send_message(prompt)
                             st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
-                            st.chat_message("assistant").write(resp.text)
-                        except Exception as e:
-                             # === כאן התיקון העיקרי: הצגת השגיאה האמיתית ===
-                             st.error(f"⚠️ שגיאה בקבלת תשובה: {str(e)}")
-
-        except Exception as e:
-            st.warning(f"⚠️ שגיאה כללית בצ'אט: {e}")
+                            with st.chat_message("assistant"):
+                                st.markdown(resp.text)
+                    except Exception as e:
+                         if "429" in str(e):
+                             st.error("מגבלת מכסה: אנא המתן דקה ונסה שוב.")
+                         else:
+                             st.error(f"שגיאה בתקשורת: {e}")
 
     except Exception:
         st.error("System Error:")
