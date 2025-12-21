@@ -1,35 +1,17 @@
 import importlib
 import streamlit as st
 import sys
+import traceback
 
+# --- אתחול Session State ---
+if "looz_active" not in st.session_state:
+    st.session_state.looz_active = False
 
-#***********************************************************DEBUG************************************
-import streamlit as st
-import sys
-import importlib
-
-# --- דיבאג: ניסיון ייבוא עם הצגת שגיאה ---
+# --- ייבוא מודולים בטוח ---
 try:
     import looz
 except Exception as e:
     st.error(f"🔍 שגיאה בטעינת הקובץ looz.py: {e}")
-    looz = None
-
-try:
-    import quest
-except ImportError:
-    quest = None
-
-try:
-    import update_headers
-except ImportError:
-    update_headers = None
-#***********************************************************
-
-# נסיון לייבא את המודולים (כדי למנוע קריסה אם קובץ חסר)
-try:
-    import looz
-except ImportError:
     looz = None
 
 try:
@@ -51,7 +33,7 @@ st.set_page_config(page_title="מערכת ניהול רופין", page_icon="�
 
 st.title("🎓 ניהול מערכת שעות")
 
-# תפריט בחירה - index=None מוודא שאין ברירת מחדל
+# תפריט בחירה
 action = st.radio(
     "בחר כלי לעבודה:",
     ["בנה לי מערכת (LOOZ)", "בנה לי שאלון", "עדכן שמות שדות קובץ תשובות"],
@@ -68,7 +50,7 @@ if action == "בנה לי מערכת (LOOZ)":
         st.header("🤖 הבוט LOOZ")
         st.caption("המערכת מריצה את הלוגיקה המקומית (קובץ looz.py).")
         
-        # === תוספת: בחירת עוצמת אופטימיזציה ===
+        # בחירת עוצמת אופטימיזציה
         iterations = st.slider(
             "מספר איטרציות לאופטימיזציה", 
             min_value=1, max_value=100, value=30, 
@@ -87,38 +69,37 @@ if action == "בנה לי מערכת (LOOZ)":
 
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # כפתור ההפעלה
+        # כפתור ההפעלה - מפעיל את הדגל ב-Session State
         if st.button("התחל בבניית המערכת 🚀", type="primary", use_container_width=True):
             if courses_file and avail_file:
-                st.toast("התהליך התחיל...", icon="🚦")
-                
-                # אזור תצוגת לוגים בזמן אמת
-                status_box = st.empty()
-                status_box.info("🔄 טוען את המוח העדכני...")
-
-                try:
-                    # 1. רענון כפוי של הקוד (חשוב לפיתוח)
-                    importlib.reload(looz)
-                    status_box.info("✅ המוח נטען בהצלחה. מעבד נתונים...")
-                    
-                    # 2. איפוס קבצים (חשוב בגלל שימוש חוזר בסטרים)
-                    courses_file.seek(0)
-                    avail_file.seek(0)
-                    
-                    # 3. הרצת המוח עם ספינר
-                    with st.spinner("🤖 המוח עובד... נא להמתין"):
-                        # קריאה לפונקציה הראשית ב-looz
-                        looz.main_process(courses_file, avail_file, iterations)
-                    
-                    # 4. הודעת סיום
-                    status_box.success("🏁 התהליך הסתיים! (גלול למטה לתוצאות)")
-                    
-                except Exception as e:
-                    status_box.error("❌ התרחשה שגיאה!")
-                    st.error(f"שגיאה קריטית: {e}")
-                    # st.exception(e) # אפשר להפעיל לצורך דיבאג
+                st.session_state.looz_active = True
+                # איפוס היסטוריית צ'אט בהרצה חדשה
+                if "gemini_chat" in st.session_state:
+                    del st.session_state.gemini_chat
+                if "chat_history" in st.session_state:
+                    del st.session_state.chat_history
             else:
                 st.error("⚠️ חובה להעלות את שני הקבצים לפני ההתחלה.")
+
+        # לוגיקה שרצה אם הדגל פעיל (גם אחרי רענון של הצ'אט)
+        if st.session_state.looz_active:
+            if courses_file and avail_file:
+                try:
+                    # טעינה מחדש ליתר ביטחון
+                    importlib.reload(looz)
+                    
+                    # הרצת המוח (הפונקציה ב-looz.py)
+                    # הפונקציה ב-looz.py צריכה לדעת לנהל את ה-UI שלה בעצמה,
+                    # כולל הצגת הצ'אט בסוף.
+                    looz.main_process(courses_file, avail_file, iterations)
+                    
+                except Exception as e:
+                    st.error("❌ התרחשה שגיאה בזמן הריצה:")
+                    st.error(e)
+                    st.session_state.looz_active = False # כיבוי במקרה תקלה
+            else:
+                st.warning("נראה שהקבצים הוסרו. אנא העלה אותם מחדש ולחץ על התחל.")
+                st.session_state.looz_active = False
 
 # --- אפשרות 2: שאלון ---
 elif action == "בנה לי שאלון":
@@ -131,15 +112,11 @@ elif action == "בנה לי שאלון":
         st.error("המודול 'quest' אינו זמין (קובץ חסר).")
 
 # --- אפשרות 3: עדכון כותרות ---
-# --- אפשרות 3: עדכון כותרות ---
 elif action == "עדכן שמות שדות קובץ תשובות":
     try:
-        # ניסיון טעינה "כוחני" כדי לראות את השגיאה האמיתית אם יש
         import update_headers
-        import importlib
-        importlib.reload(update_headers) # מוודא ששינויים בגיט נטענים מיד
+        importlib.reload(update_headers)
 
-        # בדיקה איזו פונקציה קיימת בקובץ והרצתה
         if hasattr(update_headers, 'run'):
             update_headers.run()
         elif hasattr(update_headers, 'main_process'):
@@ -147,7 +124,7 @@ elif action == "עדכן שמות שדות קובץ תשובות":
         elif hasattr(update_headers, 'main'):
             update_headers.main()
         else:
-            st.warning("הקובץ update_headers.py נטען בהצלחה, אך לא נמצאה בו פונקציית הפעלה (run, main, או main_process).")
+            st.warning("הקובץ update_headers.py נטען בהצלחה, אך לא נמצאה בו פונקציית הפעלה.")
 
     except ImportError as e:
         st.error(f"❌ שגיאת ייבוא: {e}")
@@ -164,5 +141,3 @@ elif action == "עדכן שמות שדות קובץ תשובות":
 # --- מקרה ברירת מחדל ---
 elif action is None:
     st.info("⬆️ אנא בחר אחת מהאפשרויות למעלה כדי להתחיל לעבוד.")
-
-
