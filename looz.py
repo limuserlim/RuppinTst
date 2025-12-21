@@ -307,7 +307,7 @@ class SchoolScheduler:
 
 # ================= 4. MAIN PROCESS WRAPPER =================
 
-def main_process():
+def main_process(*args):
     st.title("מערכת שיבוץ מערכת שעות - LOOZ")
 
     col1, col2 = st.columns(2)
