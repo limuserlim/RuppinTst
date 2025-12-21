@@ -220,47 +220,69 @@ class Scheduler:
         for item in group:
             self.errors.append({'Course': item.get('Course'), 'Lecturer': item.get('Lecturer'), 'Reason': reason, 'LinkID': item.get('LinkID')})
 
-# ================= 4. CHAT FUNCTIONS =================
+# ================= 4. CHAT FUNCTIONS (Model Discovery) =================
 
 def init_chat_session(schedule_df, errors_df, api_key):
-    """Initializes chat with basic config and full error reporting."""
-    if not HAS_GENAI or not api_key: 
-        st.error("Missing Library or API Key")
+    """מנסה למצוא מודל זמין. אם אין - מחזירה None בצורה מסודרת."""
+    if not HAS_GENAI or not api_key: return None
+    
+    genai.configure(api_key=api_key)
+    generation_config = genai.types.GenerationConfig(temperature=0.0)
+    
+    chosen_model = None
+    try:
+        # 1. קבלת כל המודלים הזמינים לחשבון
+        models_iterator = genai.list_models()
+        available_models = []
+        for m in models_iterator:
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        # 2. נסיון למצוא מודל מועדף
+        priorities = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-1.0-pro']
+        
+        for p in priorities:
+            for av in available_models:
+                if p in av:
+                    chosen_model = av
+                    break
+            if chosen_model: break
+            
+        # 3. אם לא מצאנו מועדף, לוקחים את הראשון שקיים
+        if not chosen_model and available_models:
+            chosen_model = available_models[0]
+            
+    except Exception:
+        # שגיאה בתקשורת הראשונית עם גוגל
         return None
+
+    # אם אחרי הכל אין מודל - מחזירים None
+    if not chosen_model:
+        return None
+        
+    # הדפסה לדיבאג ב-Sidebar (רק אם נמצא מודל)
+    with st.sidebar:
+        st.caption(f"🤖 AI Model: {chosen_model.replace('models/', '')}")
+
+    # === יצירת הצ'אט ===
+    csv_sched = schedule_df.to_csv(index=False)
+    csv_errors = errors_df.to_csv(index=False)
+    
+    prompt = f"""
+    You are a data analyst for a university scheduling system.
+    Data:
+    SUCCESSFUL SCHEDULE:
+    {csv_sched}
+    FAILED COURSES:
+    {csv_errors}
+    Answer ONLY based on this data. Use Hebrew.
+    """
     
     try:
-        genai.configure(api_key=api_key)
-        generation_config = genai.types.GenerationConfig(temperature=0.0)
-        
-        # שימוש פשוט במודל היציב ביותר
-        model_name = "gemini-1.5-flash"
-
-        # הכנת נתונים
-        csv_sched = schedule_df.to_csv(index=False)
-        csv_errors = errors_df.to_csv(index=False)
-        
-        prompt = f"""
-        You are a data analyst for a university scheduling system.
-        Data:
-        SUCCESSFUL SCHEDULE:
-        {csv_sched}
-        FAILED COURSES:
-        {csv_errors}
-        Answer ONLY based on this data. Use Hebrew.
-        """
-        
-        # יצירת מודל
-        model = genai.GenerativeModel(model_name, generation_config=generation_config)
-        
-        # בדיקה יזומה אם המודל מגיב (כדי לתפוס שגיאה מיד)
-        chat = model.start_chat(history=[{"role": "user", "parts": prompt}, {"role": "model", "parts": "אני כאן."}])
-        return chat
-
-    except Exception as e:
-        # חשיפת השגיאה המדויקת למשתמש
-        st.error(f"❌ Gemini Error Details: {str(e)}")
-        # הדפסת ה-Traceback המלא לקונסול (ללוגים)
-        print(traceback.format_exc())
+        model = genai.GenerativeModel(chosen_model, generation_config=generation_config)
+        return model.start_chat(history=[{"role": "user", "parts": prompt}, {"role": "model", "parts": "אני כאן."}])
+    except Exception:
+        # אם המודל נמצא אבל יצירת הצ'אט נכשלה
         return None
 
 # ================= 5. MAIN =================
@@ -342,41 +364,54 @@ def main_process(courses_file, avail_file, iterations=30):
             st.dataframe(best_errors)
             st.download_button("⚠️ Download Errors", best_errors.to_csv(index=False).encode('utf-8-sig'), "errors.csv")
 
-        # === שלב 2: צ'אט ===
+        # === שלב 2: צ'אט (עם הודעת שגיאה אם לא זמין) ===
         st.divider()
         st.subheader("💬 Result Analysis (AI)")
 
+        chat_available = False
+        
+        # בדיקות מקדימות
         if not HAS_GENAI:
-            st.info("הצ'אט אינו זמין (חסרה ספרייה).")
+            st.warning("⚠️ לא ניתן להשתמש בצ'אט: הספרייה חסרה.")
         elif not api_key:
-            st.info("הצ'אט אינו זמין (חסר מפתח API).")
+            st.warning("⚠️ לא ניתן להשתמש בצ'אט: חסר מפתח API.")
         else:
-            # אתחול צ'אט
+            # נסיון אתחול צ'אט
             if "gemini_chat" not in st.session_state:
                 st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
                 st.session_state.chat_history = []
             
-            # בדיקה אם האתחול הצליח (אם לא, השגיאה כבר הודפסה למסך ב-init_chat_session)
-            if st.session_state.gemini_chat:
-                # רענון אם מפתח הוחלף
+            # אם gemini_chat הוא None, סימן שלא נמצא מודל או שיש תקלה
+            if st.session_state.gemini_chat is None:
+                st.error("❌ לא נמצא מודל מתאים לשיחה בחשבון זה. הצ'אט אינו זמין כעת.")
+            else:
+                chat_available = True
+                
+                # אם המפתח הוחלף
                 if "last_key" not in st.session_state or st.session_state.last_key != api_key:
                     st.session_state.last_key = api_key
                     st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
                     st.session_state.chat_history = []
+                    # בדיקה חוזרת
+                    if st.session_state.gemini_chat is None:
+                         st.error("❌ לא נמצא מודל מתאים לשיחה. הצ'אט אינו זמין כעת.")
+                         chat_available = False
 
-                for msg in st.session_state.chat_history:
-                    st.chat_message(msg["role"]).write(msg["content"])
+        # אם הכל תקין, מציגים את הצ'אט
+        if chat_available:
+            for msg in st.session_state.chat_history:
+                st.chat_message(msg["role"]).write(msg["content"])
 
-                if prompt := st.chat_input("Ask about the schedule..."):
-                    st.session_state.chat_history.append({"role": "user", "content": prompt})
-                    st.chat_message("user").write(prompt)
-                    
-                    try:
-                        resp = st.session_state.gemini_chat.send_message(prompt)
-                        st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
-                        st.chat_message("assistant").write(resp.text)
-                    except Exception as e:
-                         st.error(f"⚠️ Communication Error: {str(e)}")
+            if prompt := st.chat_input("Ask about the schedule..."):
+                st.session_state.chat_history.append({"role": "user", "content": prompt})
+                st.chat_message("user").write(prompt)
+                
+                try:
+                    resp = st.session_state.gemini_chat.send_message(prompt)
+                    st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
+                    st.chat_message("assistant").write(resp.text)
+                except Exception:
+                     st.warning("⚠️ תקלה בקבלת תשובה מג'מיני.")
 
     except Exception:
         st.error("System Error:")
