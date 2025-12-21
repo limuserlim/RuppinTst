@@ -252,7 +252,7 @@ def init_chat_session(schedule_df, errors_df, api_key):
     """
 
     # אכיפת המודל הכי יציב וחינמי בלבד
-    forced_model = "gemini-1.5-flash"
+    forced_model = "models/gemini-pro"
 
     try:
         model = genai.GenerativeModel(forced_model, generation_config=generation_config, safety_settings=safety_settings)
