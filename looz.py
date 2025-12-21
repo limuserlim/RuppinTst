@@ -4,7 +4,7 @@ import numpy as np
 import io
 import traceback
 
-# --- בדיקת ספריית ג'מיני ---
+# --- Check for Gemini Library ---
 try:
     import google.generativeai as genai
     HAS_GENAI = True
@@ -39,7 +39,7 @@ def load_uploaded_file(uploaded_file):
             except: return pd.read_csv(uploaded_file, encoding='cp1255')
         else: return pd.read_excel(uploaded_file)
     except Exception as e:
-        st.error(f"שגיאה בטעינת הקובץ: {e}")
+        st.error(f"Error loading file: {e}")
         return None
 
 def parse_availability(row, cols):
@@ -104,7 +104,7 @@ def preprocess_availability(df):
     if not lecturer_col:
         for col in df.columns:
             if "שם" in str(col) or "מרצה" in str(col): lecturer_col = col; break
-    if not lecturer_col: st.error("לא נמצאה עמודת 'שם מלא' בקובץ הזמינות."); return None, None
+    if not lecturer_col: st.error("No 'Full Name' column found in availability file."); return None, None
     df = df.rename(columns={lecturer_col: 'Lecturer'})
     df['Lecturer'] = df['Lecturer'].apply(safe_str)
     df = df[df['Lecturer'].notna()]
@@ -178,7 +178,7 @@ class Scheduler:
         try:
             dur = int(main_row['Duration'])
             sem = int(main_row['Semester'])
-        except: self.fail(group, "נתונים שגויים"); return
+        except: self.fail(group, "Invalid Data"); return
         days = [int(main_row['FixDay'])] if pd.notna(main_row['FixDay']) else [1,2,3,4,5]
         hours = list(range(8, 22))
         if str(main_row.get('Space')).lower() == 'zoom': hours.reverse()
@@ -188,8 +188,8 @@ class Scheduler:
                 if start_h + dur > 22: continue
                 if self.check_valid(group, sem, day, start_h, dur):
                     self.commit(group, sem, day, start_h, dur); return
-        reason = "לא נמצא חלון זמן"
-        if pd.notna(main_row['FixDay']): reason += " [אילוץ יום]"
+        reason = "No Time Slot Found"
+        if pd.notna(main_row['FixDay']): reason += " [Day Constraint]"
         self.fail(group, reason)
 
     def check_valid(self, group, sem, day, start_h, dur):
@@ -223,13 +223,13 @@ class Scheduler:
 # ================= 4. CHAT FUNCTIONS =================
 
 def init_chat_session(schedule_df, errors_df, api_key):
-    """מאתחל שיחה עם ג'מיני באמצעות מודל Flash המהיר והחסכוני"""
+    """Initializes chat with Gemini using Flash model, falling back to Pro."""
     if not HAS_GENAI or not api_key: return None
     
     genai.configure(api_key=api_key)
     generation_config = genai.types.GenerationConfig(temperature=0.0)
     
-    # שימוש כפוי במודל הכי יציב וחינמי
+    # Force use of the most stable and free model
     model_name = "gemini-1.5-flash"
     
     csv_sched = schedule_df.to_csv(index=False)
@@ -247,56 +247,47 @@ def init_chat_session(schedule_df, errors_df, api_key):
     
     try:
         model = genai.GenerativeModel(model_name, generation_config=generation_config)
-        return model.start_chat(history=[{"role": "user", "parts": prompt}, {"role": "model", "parts": "אני כאן."}])
+        return model.start_chat(history=[{"role": "user", "parts": prompt}, {"role": "model", "parts": "I am here."}])
     except Exception as e:
         if "429" in str(e):
-            st.error("❌ הגעת למגבלת השימוש (Quota) של גוגל. אנא המתן דקה ונסה שוב.")
+             st.error("❌ Google Quota exceeded. Please wait a minute and try again.")
+             return None
+        elif "404" in str(e):
+             # Fallback to gemini-pro if flash is not found (e.g., old library)
+             try:
+                 fallback_model = "gemini-pro"
+                 model = genai.GenerativeModel(fallback_model, generation_config=generation_config)
+                 return model.start_chat(history=[{"role": "user", "parts": prompt}, {"role": "model", "parts": "I am here."}])
+             except Exception as fallback_error:
+                 st.error(f"Error initializing fallback model ({fallback_model}): {fallback_error}")
+                 return None
         else:
-            st.error(f"שגיאה בהפעלת המודל ({model_name}): {e}")
-        return None
-    # הכנת הנתונים לפרומפט
-    csv_sched = schedule_df.to_csv(index=False)
-    csv_errors = errors_df.to_csv(index=False)
-    
-    prompt = f"""
-    You are a data analyst for a university scheduling system.
-    Data:
-    SUCCESSFUL SCHEDULE:
-    {csv_sched}
-    FAILED COURSES:
-    {csv_errors}
-    Answer ONLY based on this data. Use Hebrew.
-    """
-    
-    try:
-        model = genai.GenerativeModel(model_name, generation_config=generation_config)
-        return model.start_chat(history=[{"role": "user", "parts": prompt}, {"role": "model", "parts": "אני כאן."}])
-    except Exception as e:
-        st.error(f"שגיאה בהפעלת המודל ({model_name}): {e}")
-        return None
+            st.error(f"Error initializing model ({model_name}): {e}")
+            return None
+
 # ================= 5. MAIN =================
 
 def main_process(courses_file, avail_file, iterations=30):
     if not courses_file or not avail_file: return
     
-    # --- קבלת API KEY מה-Secrets או מהמשתמש ---
+    # --- Get API KEY from Secrets or User ---
     api_key = None
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
     
-    # אזור צדדי - להציג סטטוס או לבקש מפתח אם חסר
+    # Sidebar - Show status or request key if missing
     with st.sidebar:
-        st.header("🤖 הגדרות צ'אט")
+        st.header("🤖 Chat Settings")
         
         if not HAS_GENAI:
-            st.error("⚠️ ספריית Gemini חסרה (google-generativeai).")
+            st.error("⚠️ Gemini library missing (google-generativeai).")
         elif api_key:
-            st.success("✅ מפתח API נטען מה-Secrets")
+            st.success("✅ API Key loaded from Secrets")
         else:
-            api_key = st.text_input("Google API Key", type="password", help="נדרש רק אם לא מוגדר ב-Secrets")
+            api_key = st.text_input("Google API Key", type="password", help="Required only if not set in Secrets")
 
     st.write("---")
-    st.info("🔄 טוען נתונים...")
+    st.info("🔄 Loading Data...")
     
     try:
         c_raw = load_uploaded_file(courses_file)
@@ -308,7 +299,7 @@ def main_process(courses_file, avail_file, iterations=30):
         
         courses = preprocess_courses(c_raw)
         if courses.empty:
-            st.error("קובץ הקורסים לא תקין.")
+            st.error("Courses file is invalid.")
             return
 
         courses['Lecturer'] = courses['Lecturer'].apply(lambda x: " ".join(str(x).split()))
@@ -317,14 +308,14 @@ def main_process(courses_file, avail_file, iterations=30):
         
         if not mask.all():
             missing = courses[~mask]['Lecturer'].unique()
-            st.warning(f"⚠️ {len(missing)} מרצים חסרים בקובץ הזמינות (דוגמה: {missing[:3]})")
+            st.warning(f"⚠️ {len(missing)} lecturers missing in availability file (Example: {missing[:3]})")
             
         final_courses = courses[mask].copy()
         if final_courses.empty:
-            st.error("אין קורסים לשיבוץ (0 התאמות). בדוק שהשמות זהים בשני הקבצים.")
+            st.error("No courses to schedule (0 matches). Check that names are identical in both files.")
             return
 
-        st.success(f"✅ מתחיל שיבוץ ({iterations} איטרציות)...")
+        st.success(f"✅ Starting Scheduling ({iterations} iterations)...")
         best_sched = pd.DataFrame(); best_errors = pd.DataFrame(); min_errors = float('inf')
         bar = st.progress(0)
         
@@ -342,32 +333,32 @@ def main_process(courses_file, avail_file, iterations=30):
         st.divider()
         c1, c2 = st.columns(2)
         unique_sched = len(best_sched.drop_duplicates(subset=['Course', 'Lecturer'])) if not best_sched.empty else 0
-        c1.metric("✅ קורסים שובצו", unique_sched)
-        c2.metric("❌ לא שובצו", len(best_errors), delta_color="inverse")
+        c1.metric("✅ Courses Scheduled", unique_sched)
+        c2.metric("❌ Not Scheduled", len(best_errors), delta_color="inverse")
         
         if not best_sched.empty:
             st.dataframe(best_sched)
-            st.download_button("📥 הורד מערכת", best_sched.to_csv(index=False).encode('utf-8-sig'), "schedule.csv")
+            st.download_button("📥 Download Schedule", best_sched.to_csv(index=False).encode('utf-8-sig'), "schedule.csv")
             
         if not best_errors.empty:
-            st.error("פירוט שגיאות:")
+            st.error("Error Details:")
             st.dataframe(best_errors)
-            st.download_button("⚠️ הורד שגיאות", best_errors.to_csv(index=False).encode('utf-8-sig'), "errors.csv")
+            st.download_button("⚠️ Download Errors", best_errors.to_csv(index=False).encode('utf-8-sig'), "errors.csv")
 
         # --- CHAT SECTION ---
         st.divider()
-        st.subheader("💬 ניתוח תוצאות (AI Analyst)")
+        st.subheader("💬 Result Analysis (AI Analyst)")
 
         if not HAS_GENAI:
-            st.error("❌ ספריית הצ'אט לא מותקנת בשרת.")
+            st.error("❌ Chat library not installed on server.")
         elif not api_key:
-            st.info("👈 כדי להפעיל את הצ'אט, יש להגדיר GOOGLE_API_KEY ב-Secrets או להזין אותו בצד.")
+            st.info("👈 to enable chat, define GOOGLE_API_KEY in Secrets or enter it on the side.")
         else:
             if "gemini_chat" not in st.session_state:
                 st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
                 st.session_state.chat_history = []
             
-            # אם מפתח השתנה
+            # If key changed
             if "last_key" not in st.session_state or st.session_state.last_key != api_key:
                 st.session_state.last_key = api_key
                 st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
@@ -376,7 +367,7 @@ def main_process(courses_file, avail_file, iterations=30):
             for msg in st.session_state.chat_history:
                 st.chat_message(msg["role"]).write(msg["content"])
 
-            if prompt := st.chat_input("שאל אותי על השיבוץ (למשל: למה קורס X לא שובץ?)"):
+            if prompt := st.chat_input("Ask me about the schedule (e.g., Why was course X not scheduled?)"):
                 st.session_state.chat_history.append({"role": "user", "content": prompt})
                 st.chat_message("user").write(prompt)
                 
@@ -386,14 +377,11 @@ def main_process(courses_file, avail_file, iterations=30):
                         st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
                         st.chat_message("assistant").write(resp.text)
                     except Exception as ex:
-                        st.error(f"שגיאה בצ'אט: {ex}")
+                        st.error(f"Chat Error: {ex}")
 
     except Exception:
-        st.error("שגיאה כללית במערכת:")
+        st.error("General System Error:")
         st.code(traceback.format_exc())
 
 if __name__ == "__main__":
     pass
-
-
-
