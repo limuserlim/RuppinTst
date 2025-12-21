@@ -224,14 +224,11 @@ class Scheduler:
 # ================= 4. CHAT FUNCTIONS =================
 
 def init_chat_session(schedule_df, errors_df, api_key):
-    """גרסה סופית לעקיפת שגיאות גרסה ו-404"""
     if not HAS_GENAI or not api_key: return None
-    
     try:
-        # הגדרת ה-API לעבוד עם גרסה v1 יציבה במקום beta
-        genai.configure(api_key=api_key) 
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
         
-        # הכנת הנתונים כטקסט פשוט
         csv_sched = schedule_df.to_csv(index=False)
         csv_errors = errors_df.to_csv(index=False)
         
@@ -241,19 +238,12 @@ def init_chat_session(schedule_df, errors_df, api_key):
         FAILED: {csv_errors}
         Answer in Hebrew based on this data."""
 
-        # שימוש בשם המודל ללא קידומות models/ או v1beta
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        
-        # התחלת שיחה עם מבנה הודעות פשוט (parts)
         chat = model.start_chat(history=[
             {"role": "user", "parts": [prompt]},
             {"role": "model", "parts": ["אני כאן לעזור בניתוח השיבוץ."]}
         ])
-        
         return chat
-
     except Exception as e:
-        # הדפסת השגיאה ללוג למקרה של תקלה נוספת
         print(f"DEBUG: Chat initialization failed: {e}")
         return None
 
@@ -376,4 +366,3 @@ def main_process(courses_file, avail_file, iterations=30):
 
 if __name__ == "__main__":
     pass
-
