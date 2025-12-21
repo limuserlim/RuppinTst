@@ -4,6 +4,13 @@ import numpy as np
 import io
 import traceback
 
+# --- תוספת: ייבוא ספריית ג'מיני בצורה בטוחה ---
+try:
+    import google.generativeai as genai
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+
 # ================= 1. UTILS =================
 
 def safe_str(val):
@@ -312,10 +319,56 @@ class Scheduler:
                 'LinkID': item.get('LinkID')
             })
 
-# ================= 4. MAIN =================
+# ================= 4. CHAT FUNCTIONS (NEW) =================
+
+def init_chat_session(schedule_df, errors_df, api_key):
+    """מאתחל שיחה עם ג'מיני בהתבסס על תוצאות השיבוץ"""
+    if not HAS_GENAI or not api_key: return None
+    
+    genai.configure(api_key=api_key)
+    # temperature=0.0 מבטיח תשובות מדויקות ולא יצירתיות
+    generation_config = genai.types.GenerationConfig(temperature=0.0)
+    
+    # המרת הנתונים ל-CSV כדי שהמודל יבין
+    csv_sched = schedule_df.to_csv(index=False)
+    csv_errors = errors_df.to_csv(index=False)
+    
+    prompt = f"""
+    You are a data analyst for a university scheduling system.
+    Here is the data of the generated schedule:
+    
+    SUCCESSFUL SCHEDULE (CSV):
+    {csv_sched}
+    
+    FAILED/UNSCHEDULED COURSES (CSV):
+    {csv_errors}
+    
+    Please answer questions based ONLY on this data.
+    If asked about a specific lecturer or course, look it up in the data.
+    Answer concisely and in Hebrew.
+    """
+    
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash", generation_config=generation_config)
+        chat = model.start_chat(history=[
+            {"role": "user", "parts": prompt},
+            {"role": "model", "parts": "הבנתי. אני אנליסט הנתונים שלך. שאל אותי שאלות על השיבוץ."}
+        ])
+        return chat
+    except Exception as e:
+        return None
+
+# ================= 5. MAIN =================
 
 def main_process(courses_file, avail_file, iterations=30):
     if not courses_file or not avail_file: return
+    
+    # --- Sidebar API Key ---
+    with st.sidebar:
+        st.header("🤖 הגדרות צ'אט")
+        api_key = st.text_input("Google API Key", type="password")
+        if not HAS_GENAI:
+            st.warning("⚠️ ספריית Gemini חסרה. הצ'אט לא יעבוד.")
     
     st.write("---")
     st.info("🔄 טוען נתונים...")
@@ -352,45 +405,4 @@ def main_process(courses_file, avail_file, iterations=30):
             return
 
         # 4. הרצה
-        st.success(f"✅ מתחיל שיבוץ ({iterations} איטרציות)...")
-        
-        best_sched = pd.DataFrame()
-        best_errors = pd.DataFrame()
-        min_errors = float('inf')
-        
-        bar = st.progress(0)
-        
-        for i in range(iterations + 1):
-            bar.progress(i / (iterations + 1))
-            sched = Scheduler(final_courses, avail_db, sparsity)
-            s, e = sched.run(shuffle=(i > 0))
-            
-            if len(e) < min_errors:
-                min_errors = len(e)
-                best_sched = s
-                best_errors = e
-                if min_errors == 0: break
-        
-        bar.empty()
-        
-        # 5. תוצאות
-        st.divider()
-        c1, c2 = st.columns(2)
-        c1.metric("✅ שובצו", len(best_sched))
-        c2.metric("❌ לא שובצו", len(best_errors), delta_color="inverse")
-        
-        if not best_sched.empty:
-            st.dataframe(best_sched)
-            st.download_button("📥 הורד מערכת", best_sched.to_csv(index=False).encode('utf-8-sig'), "schedule.csv")
-            
-        if not best_errors.empty:
-            st.error("פירוט שגיאות:")
-            st.dataframe(best_errors)
-            st.download_button("⚠️ הורד שגיאות", best_errors.to_csv(index=False).encode('utf-8-sig'), "errors.csv")
-
-    except Exception:
-        st.error("שגיאה כללית במערכת:")
-        st.code(traceback.format_exc())
-
-if __name__ == "__main__":
-    pass
+        st.success(f"✅ מתחיל שי
