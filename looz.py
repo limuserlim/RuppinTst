@@ -219,113 +219,131 @@ def run_scheduler(df_courses, lecturer_availability, randomize=False):
 def main_process(*args):
     st.title("מערכת שיבוץ אוטומטית - LOOZ 📅")
 
-    # ניהול מצב (Session State) כדי שהתוצאות לא ייעלמו
+    # 1. State Initialization
     if 'results' not in st.session_state:
         st.session_state.results = None
     if 'errors' not in st.session_state:
         st.session_state.errors = None
 
-    # אם עדיין אין תוצאות, הצג את מסך ההעלאה וההגדרות
-    if st.session_state.results is None:
-        st.sidebar.header("הגדרות הרצה")
-        # --- השינוי שביקשת כאן: טווח 1 עד 100, ברירת מחדל 30 ---
-        iterations = st.sidebar.slider("מספר איטרציות לאופטימיזציה", 1, 100, 30, help="המחשב יבצע את השיבוץ מספר פעמים ויבחר את הטוב ביותר.")
-        
-        st.markdown("### העלאת נתונים")
-        col1, col2 = st.columns(2)
-        with col1:
-            file_courses = st.file_uploader("קובץ קורסים (Courses)", type=['xlsx', 'csv'])
-        with col2:
-            file_avail = st.file_uploader("קובץ זמינות (Availability)", type=['xlsx', 'csv'])
-
-        if file_courses and file_avail:
-            with st.spinner('בודק תקינות קבצים...'):
-                df_c_raw, msg_c = smart_load_dataframe(file_courses, 'courses')
-                df_a_raw, msg_a = smart_load_dataframe(file_avail, 'avail')
-                
-                if df_c_raw is None: st.error(msg_c)
-                elif df_a_raw is None: st.error(msg_a)
-                else:
-                    st.success("✅ הקבצים תקינים. מוכן לשיבוץ.")
-                    
-                    if st.button("🚀 התחל שיבוץ אוטומטי", type="primary"):
-                        # תהליך השיבוץ
-                        df_courses = preprocess_courses(df_c_raw)
-                        lecturer_avail = process_availability_multi_semester(df_a_raw)
-                        
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        
-                        best_score = -1
-                        best_sched = None
-                        best_err = None
-                        
-                        # לולאת האופטימיזציה
-                        for i in range(iterations):
-                            status_text.text(f"מבצע אופטימיזציה: הרצה {i+1} מתוך {iterations}...")
-                            # בהרצה הראשונה - סדר רגיל (לפי גודל). בהבאות - ערבוב.
-                            is_random = (i > 0)
-                            
-                            curr_sched, curr_err = run_scheduler(df_courses, lecturer_avail, randomize=is_random)
-                            score = len(curr_sched) # כמה שיותר קורסים שובצו = יותר טוב
-                            
-                            if score > best_score:
-                                best_score = score
-                                best_sched = curr_sched
-                                best_err = curr_err
-                            
-                            # עדכון בר
-                            progress_bar.progress((i + 1) / iterations)
-                        
-                        # שמירה בזיכרון ומחיקת ה-UI הישן
-                        st.session_state.results = best_sched
-                        st.session_state.errors = best_err
-                        st.rerun() # רענון הדף כדי להציג רק את התוצאות
-
-    # אם יש תוצאות, הצג רק אותן (בלי כפתורי העלאה)
+    # 2. Logic Controller
+    # אם יש תוצאות שמורות בזיכרון, נציג אותן
+    if st.session_state.results is not None:
+        show_results_screen()
     else:
-        st.success("✨ השיבוץ הסתיים בהצלחה!")
+        # אחרת, נציג את מסך ההעלאה
+        show_upload_screen()
+
+def show_upload_screen():
+    st.sidebar.header("הגדרות הרצה")
+    iterations = st.sidebar.slider("מספר איטרציות לאופטימיזציה", 1, 100, 30)
+    
+    st.markdown("### העלאת נתונים")
+    col1, col2 = st.columns(2)
+    with col1:
+        file_courses = st.file_uploader("קובץ קורסים (Courses)", type=['xlsx', 'csv'], key="u_courses")
+    with col2:
+        file_avail = st.file_uploader("קובץ זמינות (Availability)", type=['xlsx', 'csv'], key="u_avail")
+
+    if file_courses and file_avail:
+        with st.spinner('בודק תקינות קבצים...'):
+            df_c_raw, msg_c = smart_load_dataframe(file_courses, 'courses')
+            df_a_raw, msg_a = smart_load_dataframe(file_avail, 'avail')
+            
+            if df_c_raw is None: st.error(msg_c)
+            elif df_a_raw is None: st.error(msg_a)
+            else:
+                st.success("✅ הקבצים תקינים. מוכן לשיבוץ.")
+                
+                if st.button("🚀 התחל שיבוץ אוטומטי", type="primary"):
+                    perform_scheduling(df_c_raw, df_a_raw, iterations)
+
+def perform_scheduling(df_c_raw, df_a_raw, iterations):
+    # Wrapper function to handle logic and update state
+    try:
+        df_courses = preprocess_courses(df_c_raw)
+        lecturer_avail = process_availability_multi_semester(df_a_raw)
         
-        # כפתור להתחלה מחדש
-        if st.button("🔄 התחל שיבוץ חדש (נקה נתונים)"):
-            st.session_state.results = None
-            st.session_state.errors = None
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        best_score = -1
+        best_sched = pd.DataFrame() # Initialize as empty DF
+        best_err = pd.DataFrame()
+        
+        for i in range(iterations):
+            status_text.text(f"מבצע אופטימיזציה: הרצה {i+1} מתוך {iterations}...")
+            is_random = (i > 0)
+            
+            curr_sched, curr_err = run_scheduler(df_courses, lecturer_avail, randomize=is_random)
+            score = len(curr_sched)
+            
+            if score > best_score:
+                best_score = score
+                best_sched = curr_sched
+                best_err = curr_err
+            
+            progress_bar.progress((i + 1) / iterations)
+        
+        # Save to Session State
+        st.session_state.results = best_sched
+        st.session_state.errors = best_err
+        
+        # Force Rerun to update view
+        try:
             st.rerun()
+        except AttributeError:
+            st.experimental_rerun()
             
-        df_final = st.session_state.results
-        df_errors = st.session_state.errors
+    except Exception as e:
+        st.error(f"התרחשה שגיאה במהלך השיבוץ: {str(e)}")
+
+def show_results_screen():
+    st.success("✨ השיבוץ הסתיים!")
+    
+    if st.button("🔄 התחל שיבוץ חדש (נקה נתונים)"):
+        st.session_state.results = None
+        st.session_state.errors = None
+        try:
+            st.rerun()
+        except AttributeError:
+            st.experimental_rerun()
+        return
+
+    df_final = st.session_state.results
+    df_errors = st.session_state.errors
+    
+    # Check if empty (Safe Guard)
+    if df_final is None: df_final = pd.DataFrame()
+    if df_errors is None: df_errors = pd.DataFrame()
+
+    m1, m2 = st.columns(2)
+    m1.metric("קורסים שובצו", len(df_final))
+    m2.metric("לא שובצו / שגיאות", len(df_errors), delta_color="inverse")
+    
+    st.divider()
+    
+    st.subheader("📅 טבלת השיבוץ הסופית")
+    search_term = st.text_input("🔍 חיפוש מהיר (מרצה, קורס, יום...):")
+    
+    if not df_final.empty:
+        display_df = df_final
+        if search_term:
+            mask = df_final.astype(str).apply(lambda x: x.str.contains(search_term, case=False, na=False)).any(axis=1)
+            display_df = df_final[mask]
         
-        # סטטיסטיקה
-        m1, m2 = st.columns(2)
-        m1.metric("קורסים שובצו", len(df_final))
-        m2.metric("לא שובצו / שגיאות", len(df_errors), delta_color="inverse")
-        
-        st.divider()
-        
-        # טבלת השיבוץ + סינון
-        st.subheader("📅 טבלת השיבוץ הסופית")
-        search_term = st.text_input("🔍 חיפוש מהיר (מרצה, קורס, יום...):")
-        
-        if not df_final.empty:
-            display_df = df_final
-            if search_term:
-                mask = df_final.astype(str).apply(lambda x: x.str.contains(search_term, case=False, na=False)).any(axis=1)
-                display_df = df_final[mask]
-            
-            st.dataframe(display_df, use_container_width=True)
-            
-            # הורדה
-            csv = display_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 הורד שיבוץ לאקסל (CSV)", csv, "Final_Schedule.csv", "text/csv")
-        
-        # טבלת שגיאות
-        if not df_errors.empty:
-            st.markdown("---")
-            st.subheader("⚠️ דוח שגיאות וחריגים")
-            with st.expander("לחץ כאן לצפייה בקורסים שלא שובצו"):
-                st.dataframe(df_errors, use_container_width=True)
-                csv_err = df_errors.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("📥 הורד דוח שגיאות", csv_err, "Errors.csv", "text/csv")
+        st.dataframe(display_df, use_container_width=True)
+        csv = display_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("📥 הורד שיבוץ לאקסל (CSV)", csv, "Final_Schedule.csv", "text/csv")
+    else:
+        st.warning("לא נמצאו שיבוצים תקינים להצגה.")
+
+    if not df_errors.empty:
+        st.markdown("---")
+        st.subheader("⚠️ דוח שגיאות וחריגים")
+        with st.expander("לחץ כאן לצפייה בקורסים שלא שובצו"):
+            st.dataframe(df_errors, use_container_width=True)
+            csv_err = df_errors.to_csv(index=False).encode('utf-8-sig')
+            st.download_button("📥 הורד דוח שגיאות", csv_err, "Errors.csv", "text/csv")
 
 if __name__ == "__main__":
     main_process()
