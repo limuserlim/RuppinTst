@@ -3,29 +3,45 @@ import pandas as pd
 import numpy as np
 import io
 
-# ================= 1. HELPER FUNCTIONS =================
+# ================= 1. NUCLEAR CLEANING UTILS =================
 
-def clean_text(text):
-    """ניקוי רווחים והמרה בטוחה למחרוזת"""
-    if pd.isna(text) or str(text).strip() == "":
+def safe_str_convert(val):
+    """
+    פונקציית המרה אגרסיבית שמונעת קריסות מסוג unhashable type: dict
+    """
+    if val is None or pd.isna(val):
         return None
-    return " ".join(str(text).strip().split())
-
-def safe_str(val):
-    """המרה בטוחה למחרוזת שמונעת שגיאות dict/list"""
-    if pd.isna(val):
-        return None
+    
+    # אם הערך הוא מילון או רשימה (הגורם לשגיאה) - המר אותו לטקסט
     if isinstance(val, (dict, list, tuple)):
-        return str(val) # הופך מבנה מורכב למחרוזת פשוטה
-    return str(val).strip()
+        return str(val)
+        
+    # המרה רגילה לטקסט וניקוי רווחים
+    s = str(val).strip()
+    if s == "":
+        return None
+    return s
+
+def sanitize_dataframe(df):
+    """
+    עובר על כל העמודות בטבלה ומנקה אובייקטים בעייתיים
+    """
+    if df is None or df.empty:
+        return df
+        
+    # המרה של כל התאים לפורמט בטוח
+    for col in df.columns:
+        # טיפול ספציפי בעמודות שחשודות בבעיות
+        if df[col].dtype == object:
+             df[col] = df[col].apply(safe_str_convert)
+             
+    return df
 
 def parse_availability_string(avail_str):
-    """Strict Parsing: רק מה שכתוב מפורשות נחשב פנוי"""
     slots = set()
     if pd.isna(avail_str):
         return slots
     
-    # המרה למחרוזת ליתר ביטחון
     s = str(avail_str).replace(';', ',')
     parts = s.split(',')
     
@@ -33,18 +49,17 @@ def parse_availability_string(avail_str):
         part = part.strip()
         if '-' in part:
             try:
-                # תמיכה בפורמט 16-18
-                start_s, end_s = part.split('-')
-                start = int(float(start_s)) # float למקרה שיש 16.0
-                end = int(float(end_s))
+                # תמיכה במקרה של מספרים עשרוניים 16.0
+                p_split = part.split('-')
+                start = int(float(p_split[0]))
+                end = int(float(p_split[1]))
                 for h in range(start, end):
                     slots.add(h)
-            except ValueError:
+            except (ValueError, IndexError):
                 continue
     return slots
 
 def load_uploaded_file(uploaded_file):
-    """טעינת קובץ עם טיפול בקידודים"""
     if uploaded_file is None:
         return None
     try:
@@ -68,7 +83,7 @@ def preprocess_courses(df):
     df = df.dropna(how='all')
     df.columns = df.columns.str.strip()
     
-    # מיפוי עמודות חכם
+    # מיפוי עמודות
     col_map = {}
     for col in df.columns:
         c_lower = str(col).lower().strip()
@@ -84,23 +99,14 @@ def preprocess_courses(df):
             
     df = df.rename(columns=col_map)
     
-    # וידוא עמודות חובה
+    # ניקוי "גרעיני" לכל הטבלה כדי למנוע את השגיאה
+    df = sanitize_dataframe(df)
+
     if 'Course' not in df.columns or 'Lecturer' not in df.columns:
-        return pd.DataFrame() # החזר ריק אם אין עמודות חובה
+        return pd.DataFrame()
 
     df = df[df['Course'].notna() & df['Lecturer'].notna()]
     
-    # === ניקוי נתונים קריטי ===
-    for col in ['Course', 'Lecturer', 'Space']:
-        if col in df.columns:
-            df[col] = df[col].apply(clean_text)
-
-    # טיפול מיוחד ב-LinkID למניעת שגיאת unhashable type: dict
-    if 'LinkID' in df.columns:
-        df['LinkID'] = df['LinkID'].apply(safe_str)
-    else:
-        df['LinkID'] = None # הוספה אם חסר
-            
     # המרות מספריות בטוחות
     for col in ['Duration', 'Semester']:
         if col in df.columns:
@@ -114,6 +120,11 @@ def preprocess_courses(df):
     if 'Year' in df.columns and 'Semester' in df.columns and 'Course' in df.columns:
         df['UniqueKey'] = df['Year'].astype(str) + "_" + df['Semester'].astype(str) + "_" + df['Course']
     
+    # הוספת עמודות חסרות כ-None
+    for req in ['LinkID', 'FixDay', 'FixHour', 'Space', 'Year']:
+        if req not in df.columns:
+            df[req] = None
+            
     return df
 
 def preprocess_availability(df):
@@ -134,8 +145,11 @@ def preprocess_availability(df):
         return None, None, None
     
     df = df.rename(columns={lecturer_col: 'Lecturer'})
+    
+    # ניקוי "גרעיני" גם כאן
+    df = sanitize_dataframe(df)
+    
     df = df[df['Lecturer'].notna()]
-    df['Lecturer'] = df['Lecturer'].apply(clean_text)
     
     availability_db = {}
     lecturer_sparsity = {}
@@ -171,10 +185,6 @@ def preprocess_availability(df):
 # ================= 3. SCHEDULER ENGINE =================
 
 def get_schedule_waves(df, sparsity_scores):
-    # וידוא שכל העמודות קיימות
-    for c in ['LinkID', 'FixDay', 'FixHour', 'Sparsity']:
-        if c not in df.columns: df[c] = None
-        
     df['Sparsity'] = df['Lecturer'].map(sparsity_scores).fillna(0)
     
     # חלוקה לגלים
@@ -193,7 +203,7 @@ class SchoolScheduler:
         self.avail_db = avail_db
         self.schedule = []
         self.unscheduled = []
-        self.student_busy = {} # Year -> Sem -> Day -> Hour -> bool
+        self.student_busy = {} 
         self.hours_range = range(8, 22)
         
     def is_student_busy(self, year, semester, day, hour):
@@ -206,20 +216,16 @@ class SchoolScheduler:
         self.student_busy[year][semester][day][hour] = True
 
     def find_slot(self, row, group_rows=None):
-        lecturer = row['Lecturer']
         try:
             duration = int(row['Duration'])
             semester = int(row['Semester'])
         except: return None, None
         
-        year = row.get('Year', 'Unk')
-        space = row.get('Space', '')
-        
         # אילוצים קשיחים
         fixed_days = [int(row['FixDay'])] if pd.notna(row['FixDay']) else [1,2,3,4,5]
         
         hours = list(self.hours_range)
-        if str(space).lower() == 'zoom': hours.reverse() # זום מהסוף
+        if str(row.get('Space')).lower() == 'zoom': hours.reverse()
         if pd.notna(row['FixHour']): hours = [int(row['FixHour'])]
 
         rows_to_check = group_rows if group_rows else [row]
@@ -229,10 +235,8 @@ class SchoolScheduler:
                 if start_h + duration > 22: continue
                 
                 valid = True
-                # בדיקה לכל הקורסים בקבוצה (או לקורס הבודד)
                 for item in rows_to_check:
                     l_item = item['Lecturer']
-                    y_item = item.get('Year', 'Unk')
                     
                     # בדיקת טווח השעות
                     for h in range(start_h, start_h + duration):
@@ -250,7 +254,8 @@ class SchoolScheduler:
                         if not valid: break
                         
                         # 3. האם הסטודנטים תפוסים?
-                        if self.is_student_busy(y_item, semester, day, h):
+                        y_item = item.get('Year')
+                        if y_item and self.is_student_busy(y_item, semester, day, h):
                             valid = False; break
                     
                     if not valid: break
@@ -271,7 +276,8 @@ class SchoolScheduler:
                 'Space': row.get('Space'),
                 'LinkID': row.get('LinkID')
             })
-            self.mark_student_busy(row.get('Year'), row.get('Semester'), day, h)
+            if row.get('Year'):
+                self.mark_student_busy(row['Year'], row['Semester'], day, h)
 
     def run(self):
         waves = get_schedule_waves(self.courses, self.avail_db)
@@ -283,8 +289,13 @@ class SchoolScheduler:
             bar.progress((i + 1) / 4)
             for _, row in wave.iterrows():
                 try:
-                    # טיפול ב-LinkID
-                    lid = row['LinkID']
+                    # הגנה מפני מפתחות לא חוקיים בסט
+                    lid = row.get('LinkID')
+                    
+                    # וידוא ש-lid הוא לא מילון/רשימה לפני בדיקה ב-set
+                    if isinstance(lid, (dict, list)):
+                        lid = str(lid)
+                    
                     if pd.notna(lid) and lid in processed_links:
                         continue
                         
@@ -301,15 +312,12 @@ class SchoolScheduler:
                         else:
                             self.commit(row, day, start_h)
                     else:
-                        # דיווח על כישלון
                         items = group if group else [row]
                         reason = "No Slot found"
                         if pd.notna(row['FixDay']): reason += " (Fixed Constraint)"
                         
                         for item in items:
-                            # המרה למילון אם זה Pandas Series
                             if isinstance(item, pd.Series): item = item.to_dict()
-                            
                             self.unscheduled.append({
                                 'Course': item.get('Course'),
                                 'Lecturer': item.get('Lecturer'),
@@ -318,7 +326,8 @@ class SchoolScheduler:
                             })
                             
                 except Exception as e:
-                    print(f"Error in row: {e}")
+                    # תפיסת שגיאות כדי למנוע קריסה מוחלטת
+                    # print(f"Row Error: {e}") 
                     continue
                     
         bar.empty()
@@ -331,7 +340,7 @@ def main_process(courses_file, avail_file, iterations=20):
         return
 
     st.write("---")
-    st.info("🔄 מעבד נתונים...")
+    st.info(f"🔄 מעבד נתונים...")
 
     # Load
     c_raw = load_uploaded_file(courses_file)
@@ -349,12 +358,11 @@ def main_process(courses_file, avail_file, iterations=20):
         return
 
     # Check Intersection
-    # סינון קורסים שאין להם מרצה זמין
     valid_lecs = set(avail_db.keys())
     mask = courses_clean['Lecturer'].isin(valid_lecs)
     removed = courses_clean[~mask]
     if not removed.empty:
-        st.warning(f"הוסרו {len(removed)} קורסים כי למרצה אין נתוני זמינות.")
+        st.warning(f"תשומת לב: הוסרו {len(removed)} קורסים כי למרצה אין נתוני זמינות.")
         
     courses_ready = courses_clean[mask].copy()
     
