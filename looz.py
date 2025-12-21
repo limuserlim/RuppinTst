@@ -77,17 +77,11 @@ def get_tokens(name):
 # ================= 2. DATA PROCESSING =================
 
 def process_availability_multi_semester(df_avail):
-    """
-    מעבד את קובץ הזמינות וכולל מנגנון חכם להסרת כפילויות לפי זמן.
-    """
     lecturer_availability = {}
     
-    # 1. יצירת עמודת עזר של שם נקי לזיהוי כפילויות
     df_avail['clean_name'] = df_avail['שם מלא'].apply(clean_text)
-    df_avail = df_avail.dropna(subset=['clean_name']) # מחיקת שורות ריקות
+    df_avail = df_avail.dropna(subset=['clean_name'])
 
-    # 2. מנגנון הסרת כפילויות (החלק החדש)
-    # מחפשים עמודה שיש בה את המילה Timestamp או 'זמן'
     time_col = None
     for col in df_avail.columns:
         if 'time' in str(col).lower() or 'זמן' in str(col):
@@ -96,13 +90,11 @@ def process_availability_multi_semester(df_avail):
     
     if time_col:
         try:
-            # מנסים להמיר לתאריך כדי למיין נכון
             df_avail[time_col] = pd.to_datetime(df_avail[time_col], dayfirst=True, errors='coerce')
-            df_avail = df_avail.sort_values(by=time_col) # מיון מהישן לחדש
+            df_avail = df_avail.sort_values(by=time_col)
         except:
-            pass # אם ההמרה נכשלה, מסתמכים על סדר השורות המקורי
+            pass
 
-    # מחיקת כפילויות - משאירים תמיד את השורה האחרונה (keep='last')
     original_count = len(df_avail)
     df_avail = df_avail.drop_duplicates(subset=['clean_name'], keep='last')
     final_count = len(df_avail)
@@ -110,14 +102,12 @@ def process_availability_multi_semester(df_avail):
     if original_count > final_count:
         st.toast(f"🧹 הוסרו {original_count - final_count} רשומות כפולות (נשמרו העדכניות ביותר).")
 
-    # 3. בניית המילון
     for index, row in df_avail.iterrows():
         lecturer = row['clean_name']
         lecturer_availability[lecturer] = {}
         
         for col_name in df_avail.columns:
             col_str = str(col_name).strip()
-            # פורמט XY
             if len(col_str) == 2 and col_str.isdigit():
                 day_digit = int(col_str[0])
                 sem_digit = int(col_str[1])
@@ -203,7 +193,6 @@ def attempt_schedule(df_courses, lecturer_availability):
     groups = df_courses[df_courses['קישור'].notna()]
     singles = df_courses[df_courses['קישור'].isna()]
 
-    # שיבוץ קבוצות
     for lid in groups['קישור'].unique():
         grp = groups[groups['קישור'] == lid]
         duration = int(grp.iloc[0]['שעות'])
@@ -230,7 +219,6 @@ def attempt_schedule(df_courses, lecturer_availability):
             for _, row in grp.iterrows():
                 unscheduled.append({'Course': row['שם קורס'], 'Lecturer': row['מרצה'], 'Reason': 'Link Conflict'})
 
-    # שיבוץ בודדים
     for _, row in singles.iterrows():
         lect, course, duration = row['מרצה'], row['שם קורס'], int(row['שעות'])
         year, sem = row['Year'], row['Semester']
@@ -241,97 +229,4 @@ def attempt_schedule(df_courses, lecturer_availability):
         
         search_hours = list(HOURS_RANGE)
         if is_zoom: search_hours.reverse()
-        days_check = [int(fixed_day)] if pd.notna(fixed_day) else range(1, 6)
-        
-        assigned = False
-        if pd.notna(fixed_hour):
-            h = int(fixed_hour)
-            for d in days_check:
-                if is_slot_free(lect, year, sem, d, h, duration, is_zoom):
-                    book_slot(lect, year, sem, d, h, duration, course, row['מרחב'])
-                    assigned = True; break
-        else:
-            for d in days_check:
-                for h in search_hours:
-                    if is_slot_free(lect, year, sem, d, h, duration, is_zoom):
-                        book_slot(lect, year, sem, d, h, duration, course, row['מרחב'])
-                        assigned = True; break
-                if assigned: break
-        
-        if not assigned:
-            unscheduled.append({'Course': course, 'Lecturer': lect, 'Reason': 'No Slot Found'})
-
-    return pd.DataFrame(schedule), pd.DataFrame(unscheduled)
-
-# ================= 4. OPTIMIZATION =================
-
-def optimize_schedule(df_courses, lecturer_availability, iterations=30):
-    sparsity_scores = {}
-    for lect, sem_data in lecturer_availability.items():
-        total = 0
-        for s_data in sem_data.values():
-            total += sum(len(hours) for hours in s_data.values())
-        sparsity_scores[lect] = total
-    
-    df_courses['Sparsity'] = df_courses['מרצה'].map(sparsity_scores).fillna(999)
-    df_courses['Constraint'] = df_courses['אילוץ יום'].notna() | df_courses['אילוץ שעה'].notna()
-    df_courses['Link'] = df_courses['קישור'].notna()
-    df_courses['Zoom'] = df_courses['מרחב'].astype(str).str.contains('זום', na=False)
-    
-    best_schedule = pd.DataFrame()
-    best_unscheduled = pd.DataFrame()
-    min_errors = float('inf')
-    
-    prog_bar = st.progress(0)
-    
-    for i in range(iterations):
-        prog_bar.progress((i + 1) / iterations)
-        
-        df_courses['Rnd'] = np.random.rand(len(df_courses))
-        df_sorted = df_courses.sort_values(
-            by=['Constraint', 'Link', 'Zoom', 'Sparsity', 'שעות', 'Rnd'],
-            ascending=[False, False, False, True, False, False]
-        )
-        
-        sched, unsched = attempt_schedule(df_sorted, lecturer_availability)
-        
-        if len(unsched) < min_errors:
-            min_errors = len(unsched)
-            best_schedule = sched
-            best_unscheduled = unsched
-            if min_errors == 0: break
-            
-    prog_bar.empty()
-    return best_schedule, best_unscheduled
-
-# ================= 5. MAIN PROCESS (API) =================
-
-def main_process(courses_file, avail_file, iterations=30):
-    # 1. טעינה
-    df_courses, e1 = smart_load_dataframe(courses_file, 'courses')
-    df_avail, e2 = smart_load_dataframe(avail_file, 'avail')
-    
-    if e1 or e2:
-        st.error(e1 if e1 else e2)
-        return
-
-    # 2. ניקוי עמודות
-    df_courses.columns = df_courses.columns.str.strip()
-    df_avail.columns = df_avail.columns.str.strip()
-    
-    if 'שנה' in df_courses.columns: df_courses.rename(columns={'שנה': 'Year'}, inplace=True)
-    if 'סמסטר' in df_courses.columns: df_courses.rename(columns={'סמסטר': 'Semester'}, inplace=True)
-    
-    # המרת סמסטרים למספרים
-    df_courses['Semester'] = df_courses['Semester'].astype(str).str.lower().replace(SEMESTER_MAP)
-    df_courses['Semester'] = pd.to_numeric(df_courses['Semester'], errors='coerce').fillna(0).astype(int)
-
-    for c in ['שם קורס', 'מרצה', 'מרחב', 'קישור']:
-        if c in df_courses.columns: df_courses[c] = df_courses[c].apply(clean_text)
-    
-    df_courses['שעות'] = pd.to_numeric(df_courses['שעות'], errors='coerce').fillna(2)
-    if 'אילוץ יום' not in df_courses.columns: df_courses['אילוץ יום'] = np.nan
-    if 'אילוץ שעה' not in df_courses.columns: df_courses['אילוץ שעה'] = np.nan
-
-    # 3. עיבוד נתונים
-    lect_avail =
+        days_check
