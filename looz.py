@@ -224,14 +224,24 @@ class Scheduler:
 # ================= 4. CHAT FUNCTIONS =================
 
 def init_chat_session(schedule_df, errors_df, api_key):
-    """גרסה סופית למניעת שגיאת 404 באמצעות נתיב מודל מלא"""
+    """גרסה חכמה שמוצאת מודל זמין באופן אוטומטי למניעת 404"""
     if not HAS_GENAI or not api_key: return None
     
     try:
-        # הגדרה בסיסית
         genai.configure(api_key=api_key)
         
-        # הכנת הנתונים
+        # 1. משיכת רשימת המודלים שזמינים למפתח שלך
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        if not available_models:
+            print("DEBUG: No supported models found.")
+            return None
+            
+        # 2. בחירת המודל הראשון ברשימה (הכי בטוח)
+        # בדרך כלל זה יהיה gemini-1.5-flash או gemini-pro
+        chosen_model = available_models[0]
+        
+        # 3. הכנת הנתונים
         csv_sched = schedule_df.to_csv(index=False)
         csv_errors = errors_df.to_csv(index=False)
         
@@ -241,23 +251,21 @@ def init_chat_session(schedule_df, errors_df, api_key):
         FAILED: {csv_errors}
         Answer in Hebrew based on this data."""
 
-        # שימוש בנתיב המלא והרשמי של המודל כדי למנוע בלבול בגרסאות ה-API
-        # השם 'models/gemini-1.0-pro' הוא השם היציב ביותר במערכת
-        model = genai.GenerativeModel(model_name="models/gemini-1.0-pro")
+        model = genai.GenerativeModel(model_name=chosen_model)
         
-        # התחלת שיחה עם היסטוריה פשוטה
+        # 4. התחלת שיחה
         chat = model.start_chat(history=[
             {"role": "user", "parts": [prompt]},
-            {"role": "model", "parts": ["אני כאן לעזור בניתוח השיבוץ."]}
+            {"role": "model", "parts": ["שלום, מצאתי את המודל המתאים. אני מוכן לשאלות על השיבוץ."]}
         ])
         
+        # הדפסה ללוג כדי שתדעי באיזה מודל המערכת בחרה
+        print(f"DEBUG: Successfully connected to {chosen_model}")
         return chat
 
     except Exception as e:
-        # הדפסת השגיאה ללוג למקרה של תקלה טכנית
-        print(f"DEBUG: Chat initialization failed: {e}")
-        return None
-# ================= 5. MAIN =================
+        print(f"DEBUG: Dynamic discovery failed: {e}")
+        return None# ================= 5. MAIN =================
 
 def main_process(courses_file, avail_file, iterations=30):
     if not courses_file or not avail_file: return
@@ -376,4 +384,5 @@ def main_process(courses_file, avail_file, iterations=30):
 
 if __name__ == "__main__":
     pass
+
 
