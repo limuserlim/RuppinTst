@@ -224,12 +224,14 @@ class Scheduler:
 # ================= 4. CHAT FUNCTIONS =================
 
 def init_chat_session(schedule_df, errors_df, api_key):
+    """גרסה סופית למניעת שגיאת 404 באמצעות נתיב מודל מלא"""
     if not HAS_GENAI or not api_key: return None
+    
     try:
+        # הגדרה בסיסית
         genai.configure(api_key=api_key)
-        # שימוש במודל הישן והיציב ביותר כדי למנוע 404
-        model = genai.GenerativeModel("gemini-pro")
         
+        # הכנת הנתונים
         csv_sched = schedule_df.to_csv(index=False)
         csv_errors = errors_df.to_csv(index=False)
         
@@ -239,15 +241,22 @@ def init_chat_session(schedule_df, errors_df, api_key):
         FAILED: {csv_errors}
         Answer in Hebrew based on this data."""
 
+        # שימוש בנתיב המלא והרשמי של המודל כדי למנוע בלבול בגרסאות ה-API
+        # השם 'models/gemini-1.0-pro' הוא השם היציב ביותר במערכת
+        model = genai.GenerativeModel(model_name="models/gemini-1.0-pro")
+        
+        # התחלת שיחה עם היסטוריה פשוטה
         chat = model.start_chat(history=[
             {"role": "user", "parts": [prompt]},
-            {"role": "model", "parts": ["אני מנתח הנתונים שלך. מוכן לשאלות."]}
+            {"role": "model", "parts": ["אני כאן לעזור בניתוח השיבוץ."]}
         ])
+        
         return chat
+
     except Exception as e:
+        # הדפסת השגיאה ללוג למקרה של תקלה טכנית
         print(f"DEBUG: Chat initialization failed: {e}")
         return None
-
 # ================= 5. MAIN =================
 
 def main_process(courses_file, avail_file, iterations=30):
@@ -367,3 +376,4 @@ def main_process(courses_file, avail_file, iterations=30):
 
 if __name__ == "__main__":
     pass
+
