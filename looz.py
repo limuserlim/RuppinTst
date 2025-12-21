@@ -214,35 +214,34 @@ def run_scheduler(df_courses, lecturer_availability, randomize=False):
             
     return pd.DataFrame(schedule_log), pd.DataFrame(unscheduled_log)
 
-# ================= 4. MAIN PROCESS WITH SESSION STATE =================
+# ================= 4. UI LOGIC =================
 
 def main_process(*args):
     st.title("מערכת שיבוץ אוטומטית - LOOZ 📅")
 
-    # 1. State Initialization
-    if 'results' not in st.session_state:
-        st.session_state.results = None
-    if 'errors' not in st.session_state:
-        st.session_state.errors = None
+    # השתמשתי בשמות מפתח חדשים כדי למנוע התנגשויות עם ריצות קודמות
+    if 'looz_results' not in st.session_state:
+        st.session_state.looz_results = None
+    if 'looz_errors' not in st.session_state:
+        st.session_state.looz_errors = None
 
-    # 2. Logic Controller
-    # אם יש תוצאות שמורות בזיכרון, נציג אותן
-    if st.session_state.results is not None:
-        show_results_screen()
+    # לוגיקה: אם יש תוצאות, הצג אותן. אחרת, הצג מסך העלאה.
+    if st.session_state.looz_results is not None:
+        show_results_ui()
     else:
-        # אחרת, נציג את מסך ההעלאה
-        show_upload_screen()
+        show_upload_ui()
 
-def show_upload_screen():
+def show_upload_ui():
     st.sidebar.header("הגדרות הרצה")
+    # ברירת מחדל 30
     iterations = st.sidebar.slider("מספר איטרציות לאופטימיזציה", 1, 100, 30)
     
     st.markdown("### העלאת נתונים")
     col1, col2 = st.columns(2)
     with col1:
-        file_courses = st.file_uploader("קובץ קורסים (Courses)", type=['xlsx', 'csv'], key="u_courses")
+        file_courses = st.file_uploader("קובץ קורסים (Courses)", type=['xlsx', 'csv'], key="fc_uploader")
     with col2:
-        file_avail = st.file_uploader("קובץ זמינות (Availability)", type=['xlsx', 'csv'], key="u_avail")
+        file_avail = st.file_uploader("קובץ זמינות (Availability)", type=['xlsx', 'csv'], key="fa_uploader")
 
     if file_courses and file_avail:
         with st.spinner('בודק תקינות קבצים...'):
@@ -255,10 +254,9 @@ def show_upload_screen():
                 st.success("✅ הקבצים תקינים. מוכן לשיבוץ.")
                 
                 if st.button("🚀 התחל שיבוץ אוטומטי", type="primary"):
-                    perform_scheduling(df_c_raw, df_a_raw, iterations)
+                    execute_algorithm(df_c_raw, df_a_raw, iterations)
 
-def perform_scheduling(df_c_raw, df_a_raw, iterations):
-    # Wrapper function to handle logic and update state
+def execute_algorithm(df_c_raw, df_a_raw, iterations):
     try:
         df_courses = preprocess_courses(df_c_raw)
         lecturer_avail = process_availability_multi_semester(df_a_raw)
@@ -267,7 +265,7 @@ def perform_scheduling(df_c_raw, df_a_raw, iterations):
         status_text = st.empty()
         
         best_score = -1
-        best_sched = pd.DataFrame() # Initialize as empty DF
+        best_sched = pd.DataFrame()
         best_err = pd.DataFrame()
         
         for i in range(iterations):
@@ -284,35 +282,28 @@ def perform_scheduling(df_c_raw, df_a_raw, iterations):
             
             progress_bar.progress((i + 1) / iterations)
         
-        # Save to Session State
-        st.session_state.results = best_sched
-        st.session_state.errors = best_err
+        # שמירה בזיכרון החדש
+        st.session_state.looz_results = best_sched
+        st.session_state.looz_errors = best_err
         
-        # Force Rerun to update view
-        try:
-            st.rerun()
-        except AttributeError:
-            st.experimental_rerun()
+        # רענון הדף
+        st.rerun()
             
     except Exception as e:
-        st.error(f"התרחשה שגיאה במהלך השיבוץ: {str(e)}")
+        st.error(f"התרחשה שגיאה: {str(e)}")
 
-def show_results_screen():
-    st.success("✨ השיבוץ הסתיים!")
+def show_results_ui():
+    st.success("✨ השיבוץ הסתיים בהצלחה!")
     
     if st.button("🔄 התחל שיבוץ חדש (נקה נתונים)"):
-        st.session_state.results = None
-        st.session_state.errors = None
-        try:
-            st.rerun()
-        except AttributeError:
-            st.experimental_rerun()
+        st.session_state.looz_results = None
+        st.session_state.looz_errors = None
+        st.rerun()
         return
 
-    df_final = st.session_state.results
-    df_errors = st.session_state.errors
+    df_final = st.session_state.looz_results
+    df_errors = st.session_state.looz_errors
     
-    # Check if empty (Safe Guard)
     if df_final is None: df_final = pd.DataFrame()
     if df_errors is None: df_errors = pd.DataFrame()
 
@@ -335,7 +326,7 @@ def show_results_screen():
         csv = display_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button("📥 הורד שיבוץ לאקסל (CSV)", csv, "Final_Schedule.csv", "text/csv")
     else:
-        st.warning("לא נמצאו שיבוצים תקינים להצגה.")
+        st.warning("השיבוץ ריק.")
 
     if not df_errors.empty:
         st.markdown("---")
@@ -345,5 +336,7 @@ def show_results_screen():
             csv_err = df_errors.to_csv(index=False).encode('utf-8-sig')
             st.download_button("📥 הורד דוח שגיאות", csv_err, "Errors.csv", "text/csv")
 
+# מנגנון הגנה מפני הרצה כפולה בעת ייבוא מ-menu.py
 if __name__ == "__main__":
+    st.set_page_config(page_title="LOOZ Scheduler", layout="wide", page_icon="📅")
     main_process()
