@@ -5,10 +5,7 @@ import io
 import os
 
 # ================= CONFIGURATION =================
-st.set_page_config(page_title="LOOZ Scheduler", layout="wide", page_icon="📅")
-
 # Consts & Mappings
-SEMESTER_MAP = {'א': 1, 'ב': 2, 'ג': 3, '1': 1, '2': 2, 1: 1, 2: 2}
 HOURS_RANGE = range(8, 22)
 
 # Keywords to identify file types
@@ -44,7 +41,6 @@ def parse_availability_string(avail_str):
     """Parse '16-17, 18-19' into a set of hours {16, 18}"""
     slots = set()
     if pd.isna(avail_str) or str(avail_str).strip() == "": return slots
-    # Replace common delimiters
     parts = str(avail_str).replace(';', ',').replace('\n', ',').split(',')
     for part in parts:
         if '-' in part:
@@ -67,10 +63,8 @@ def smart_load_dataframe(uploaded_file, file_type):
         else:
             df = pd.read_excel(uploaded_file)
             
-        # First check
         if check_headers(df, keywords): return df, None
         
-        # If headers missing, try checking first 10 rows (common in Excel)
         if not filename.endswith('.csv'):
             for i in range(1, 10):
                 uploaded_file.seek(0)
@@ -105,49 +99,38 @@ def process_availability_multi_semester(df_avail):
     """Convert availability file to nested dict structure"""
     lecturer_availability = {}
     
-    # Identify name column
     name_col = next((c for c in df_avail.columns if 'שם מרצה' in c or 'שם מלא' in c), None)
     if not name_col: return {}
 
     df_avail['clean_name'] = df_avail[name_col].apply(clean_text)
     df_avail = df_avail.dropna(subset=['clean_name'])
-    
-    # Keep latest response if duplicates exist
     df_avail = df_avail.drop_duplicates(subset=['clean_name'], keep='last')
 
     for _, row in df_avail.iterrows():
         lecturer = row['clean_name']
         lecturer_availability[lecturer] = {}
-        
         for col_name in df_avail.columns:
             col_str = str(col_name).strip()
-            # Look for 'XY' columns (DaySemester)
             if len(col_str) == 2 and col_str.isdigit():
                 day_digit = int(col_str[0])
                 sem_digit = int(col_str[1])
-                
                 if day_digit not in range(1, 7): continue
-                
                 if sem_digit not in lecturer_availability[lecturer]:
                     lecturer_availability[lecturer][sem_digit] = {d: set() for d in range(1, 7)}
-                
                 slots = parse_availability_string(row[col_name])
                 if slots:
                     lecturer_availability[lecturer][sem_digit][day_digit] = slots
-                    
     return lecturer_availability
 
 # ================= 3. SCHEDULING ENGINE =================
 
-def run_scheduler(df_courses, lecturer_availability):
+def run_scheduler(df_courses, lecturer_availability, randomize=False):
     schedule_log = []
     unscheduled_log = []
     
-    # Grids: Key -> Set of busy hours
-    grid_lecturer = {} # {LecturerName: {Day: {Hours}}}
-    grid_student = {}  # {(Year, Semester): {Day: {Hours}}}
-
-    # Initialize Grids
+    # Grids
+    grid_lecturer = {}
+    grid_student = {}
     for l in lecturer_availability:
         grid_lecturer[l] = {d: set() for d in range(1, 7)}
         
@@ -155,28 +138,22 @@ def run_scheduler(df_courses, lecturer_availability):
     for _, row in unique_cohorts.iterrows():
         grid_student[(row['Year'], row['Semester'])] = {d: set() for d in range(1, 7)}
 
-    # Helper: Check if slot is free
     def is_slot_free(lecturer, year, semester, day, start, duration, is_zoom=False):
         if start + duration > 22: return False 
         
-        # 1. Whitelist Availability
+        # Whitelist
         lect_sem_data = lecturer_availability.get(lecturer, {}).get(semester, {})
         avail_hours = lect_sem_data.get(day, set())
         needed_hours = set(range(start, start + duration))
-        if not needed_hours.issubset(avail_hours):
-            return False
+        if not needed_hours.issubset(avail_hours): return False
 
-        # 2. Conflicts (Lecturer or Student)
+        # Conflicts
         for h in range(start, start + duration):
-            if lecturer in grid_lecturer and h in grid_lecturer[lecturer].get(day, set()):
-                return False
+            if lecturer in grid_lecturer and h in grid_lecturer[lecturer].get(day, set()): return False
             cohort_key = (year, semester)
-            if cohort_key in grid_student and h in grid_student[cohort_key].get(day, set()):
-                return False
-        
+            if cohort_key in grid_student and h in grid_student[cohort_key].get(day, set()): return False
         return True
 
-    # Helper: Book slot
     def book_slot(lecturer, year, semester, day, start, duration, course_name, space):
         cohort_key = (year, semester)
         if lecturer not in grid_lecturer: grid_lecturer[lecturer] = {d: set() for d in range(1,7)}
@@ -193,17 +170,22 @@ def run_scheduler(df_courses, lecturer_availability):
             'Space': space, 'Duration': duration
         })
 
-    # --- Engine Logic ---
+    # Logic
     df_courses['IsLinked'] = df_courses['LinkID'].notna()
     groups = df_courses[df_courses['IsLinked'] == True]
     singles = df_courses[df_courses['IsLinked'] == False]
+
+    # Randomization for iterations
+    if randomize:
+        singles = singles.sample(frac=1).reset_index(drop=True)
+    else:
+        singles = singles.sort_values(by='Duration', ascending=False)
     
-    # Phase A: Linked Groups
+    # Phase A: Linked
     for lid in groups['LinkID'].unique():
         grp = groups[groups['LinkID'] == lid]
         first = grp.iloc[0]
         duration = int(first['Duration'])
-        
         fix_d = int(first['FixDay']) if pd.notna(first['FixDay']) else None
         fix_h = int(first['FixHour']) if pd.notna(first['FixHour']) else None
         
@@ -216,23 +198,17 @@ def run_scheduler(df_courses, lecturer_availability):
                 fits_all = True
                 for _, row in grp.iterrows():
                     if not is_slot_free(row['Lecturer'], row['Year'], row['Semester'], d, h, duration):
-                        fits_all = False
-                        break
-                
+                        fits_all = False; break
                 if fits_all:
                     for _, row in grp.iterrows():
                         book_slot(row['Lecturer'], row['Year'], row['Semester'], d, h, duration, row['Course'], row['Space'])
-                    assigned = True
-                    break
+                    assigned = True; break
             if assigned: break
-            
         if not assigned:
             for _, row in grp.iterrows():
                 unscheduled_log.append({'Course': row['Course'], 'Lecturer': row['Lecturer'], 'Reason': 'Link Group Conflict'})
 
     # Phase B: Singles
-    singles = singles.sort_values(by='Duration', ascending=False)
-    
     for _, row in singles.iterrows():
         lect, course, duration = row['Lecturer'], row['Course'], int(row['Duration'])
         year, sem = row['Year'], row['Semester']
@@ -241,9 +217,114 @@ def run_scheduler(df_courses, lecturer_availability):
         
         fix_d = int(row['FixDay']) if pd.notna(row['FixDay']) else None
         fix_h = int(row['FixHour']) if pd.notna(row['FixHour']) else None
-        
         days_check = [fix_d] if fix_d else range(1, 6)
         
         hours_list = list(HOURS_RANGE)
-        if is_zoom and not fix_h:
-            hours_list
+        if is_zoom and not fix_h: hours_list.reverse()
+        hours_check = [fix_h] if fix_h else hours_list
+        
+        assigned = False
+        for d in days_check:
+            for h in hours_check:
+                if is_slot_free(lect, year, sem, d, h, duration, is_zoom):
+                    book_slot(lect, year, sem, d, h, duration, course, space)
+                    assigned = True; break
+            if assigned: break
+        if not assigned:
+            unscheduled_log.append({'Course': course, 'Lecturer': lect, 'Reason': 'No Slot Found'})
+            
+    return pd.DataFrame(schedule_log), pd.DataFrame(unscheduled_log)
+
+# ================= 4. MAIN PROCESS WRAPPER =================
+
+def main_process():
+    st.title("מערכת שיבוץ אוטומטית - LOOZ 📅")
+    st.markdown("העלה קבצי נתונים כדי להתחיל בתהליך השיבוץ.")
+
+    # --- Sidebar / Controls ---
+    st.sidebar.header("הגדרות הרצה")
+    iterations = st.sidebar.slider("מספר איטרציות (ניסיונות שיבוץ)", min_value=1, max_value=50, value=10, help="מספר הפעמים שהמערכת תנסה לשבץ כדי למצוא את הפתרון האופטימלי")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        file_courses = st.file_uploader("העלה קובץ קורסים (Courses)", type=['xlsx', 'csv'])
+    with col2:
+        file_avail = st.file_uploader("העלה קובץ זמינות (Availability)", type=['xlsx', 'csv'])
+
+    if file_courses and file_avail:
+        with st.spinner('מעבד נתונים...'):
+            df_c_raw, msg_c = smart_load_dataframe(file_courses, 'courses')
+            df_a_raw, msg_a = smart_load_dataframe(file_avail, 'avail')
+            
+            if df_c_raw is None: st.error(msg_c)
+            elif df_a_raw is None: st.error(msg_a)
+            else:
+                df_courses = preprocess_courses(df_c_raw)
+                lecturer_avail = process_availability_multi_semester(df_a_raw)
+                st.success(f"נטענו {len(df_courses)} קורסים ו-{len(lecturer_avail)} מרצים.")
+                
+                if st.button("🚀 הרץ שיבוץ (Start)", type="primary"):
+                    progress_bar = st.progress(0)
+                    best_score = -1
+                    best_schedule = None
+                    best_errors = None
+                    
+                    status_text = st.empty()
+                    
+                    # Iteration Loop
+                    for i in range(iterations):
+                        status_text.text(f"מריץ איטרציה {i+1} מתוך {iterations}...")
+                        
+                        # Randomize only if not the first run (first run is deterministic sorted by duration)
+                        is_random = (i > 0)
+                        
+                        curr_sched, curr_err = run_scheduler(df_courses, lecturer_avail, randomize=is_random)
+                        
+                        # Score: More scheduled courses = better
+                        score = len(curr_sched)
+                        
+                        if score > best_score:
+                            best_score = score
+                            best_schedule = curr_sched
+                            best_errors = curr_err
+                        
+                        # Break early if perfect
+                        if len(curr_err) == 0:
+                            break
+                            
+                        progress_bar.progress((i + 1) / iterations)
+                    
+                    progress_bar.empty()
+                    status_text.empty()
+                    
+                    # Results
+                    st.divider()
+                    st.subheader(f"📊 תוצאות השיבוץ (נבחר הטוב מבין {iterations} הרצות)")
+                    
+                    m1, m2 = st.columns(2)
+                    m1.metric("קורסים ששובצו", len(best_schedule))
+                    m2.metric("שגיאות/לא שובצו", len(best_errors), delta_color="inverse")
+                    
+                    # Filtering
+                    st.markdown("### 🔍 תחקור וסינון")
+                    search_term = st.text_input("חפש בטבלה:", placeholder="שם מרצה, קורס...")
+                    
+                    if not best_schedule.empty:
+                        display_df = best_schedule
+                        if search_term:
+                            mask = best_schedule.astype(str).apply(lambda x: x.str.contains(search_term, case=False, na=False)).any(axis=1)
+                            display_df = best_schedule[mask]
+                        
+                        st.dataframe(display_df, use_container_width=True)
+                        csv = display_df.to_csv(index=False).encode('utf-8-sig')
+                        st.download_button("📥 הורד שיבוץ (CSV)", csv, "final_schedule.csv", "text/csv")
+                    
+                    if not best_errors.empty:
+                        with st.expander("⚠️ הצג שגיאות"):
+                            st.dataframe(best_errors, use_container_width=True)
+                            csv_err = best_errors.to_csv(index=False).encode('utf-8-sig')
+                            st.download_button("📥 הורד דוח שגיאות", csv_err, "errors.csv", "text/csv")
+
+# Entry point for direct execution
+if __name__ == "__main__":
+    main_process()
