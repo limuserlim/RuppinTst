@@ -131,16 +131,38 @@ elif action == "בנה לי שאלון":
         st.error("המודול 'quest' אינו זמין (קובץ חסר).")
 
 # --- אפשרות 3: עדכון כותרות ---
+# --- אפשרות 3: עדכון כותרות ---
 elif action == "עדכן שמות שדות קובץ תשובות":
-    if update_headers:
-        try:
+    try:
+        # ניסיון טעינה "כוחני" כדי לראות את השגיאה האמיתית אם יש
+        import update_headers
+        import importlib
+        importlib.reload(update_headers) # מוודא ששינויים בגיט נטענים מיד
+
+        # בדיקה איזו פונקציה קיימת בקובץ והרצתה
+        if hasattr(update_headers, 'run'):
             update_headers.run()
-        except AttributeError:
-            st.warning("המודול update_headers נטען, אך לא נמצאה פונקציית run().")
-    else:
-        st.error("המודול 'update_headers' אינו זמין (קובץ חסר).")
+        elif hasattr(update_headers, 'main_process'):
+            update_headers.main_process()
+        elif hasattr(update_headers, 'main'):
+            update_headers.main()
+        else:
+            st.warning("הקובץ update_headers.py נטען בהצלחה, אך לא נמצאה בו פונקציית הפעלה (run, main, או main_process).")
+
+    except ImportError as e:
+        st.error(f"❌ שגיאת ייבוא: {e}")
+        st.info("ודאי שכל הספריות הנדרשות בקובץ זה מותקנות ב-requirements.txt.")
+        
+    except SyntaxError as e:
+        st.error("❌ יש שגיאת תחביר (Syntax Error) בתוך הקובץ update_headers.py:")
+        st.code(e)
+        
+    except Exception as e:
+        st.error("❌ שגיאה כללית בטעינת הקובץ:")
+        st.code(traceback.format_exc())
 
 # --- מקרה ברירת מחדל ---
 elif action is None:
     st.info("⬆️ אנא בחר אחת מהאפשרויות למעלה כדי להתחיל לעבוד.")
+
 
