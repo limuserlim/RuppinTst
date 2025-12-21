@@ -195,4 +195,202 @@ class Scheduler:
         if year not in self.busy: self.busy[year] = {}
         if sem not in self.busy[year]: self.busy[year][sem] = {}
         if day not in self.busy[year][sem]: self.busy[year][sem][day] = {}
-        self.busy[year][sem][day][h]
+        self.busy[year][sem][day][h] = True
+
+    def run(self, shuffle=False):
+        # הכנת נתונים
+        # נרמול שמות המרצים בקורסים כדי שיתאימו ל-DB
+        self.courses['Lecturer'] = self.courses['Lecturer'].apply(lambda x: " ".join(str(x).split()))
+        
+        df = self.courses.copy()
+        # מילוי 0 אם המרצה לא קיים ב-sparsity
+        df['Sparsity'] = df['Lecturer'].map(self.sparsity).fillna(0).astype(int)
+        
+        wave_hard = df[df['LinkID'].notna() | df['FixDay'].notna() | df['FixHour'].notna()]
+        wave_soft = df[~df.index.isin(wave_hard.index)]
+        
+        if shuffle:
+            wave_soft = wave_soft.sample(frac=1).reset_index(drop=True)
+        else:
+            wave_soft = wave_soft.sort_values(by=['Sparsity', 'Duration'], ascending=[True, False])
+            
+        waves = [wave_hard, wave_soft]
+        
+        self.schedule = []
+        self.errors = []
+        self.busy = {}
+        self.processed_links = set()
+        
+        for wave in waves:
+            for _, row in wave.iterrows():
+                try:
+                    lid = row['LinkID']
+                    if lid and lid in self.processed_links: continue
+                    
+                    group = [row]
+                    if lid:
+                        group_df = self.courses[self.courses['LinkID'] == lid]
+                        group = group_df.to_dict('records')
+                        self.processed_links.add(lid)
+                    
+                    self.attempt_schedule(row, group)
+                except: continue
+                
+        return pd.DataFrame(self.schedule), pd.DataFrame(self.errors)
+
+    def attempt_schedule(self, main_row, group):
+        try:
+            dur = int(main_row['Duration'])
+            sem = int(main_row['Semester'])
+        except:
+            self.fail(group, "נתונים שגויים")
+            return
+
+        days = [int(main_row['FixDay'])] if pd.notna(main_row['FixDay']) else [1,2,3,4,5]
+        hours = list(range(8, 22))
+        
+        if str(main_row.get('Space')).lower() == 'zoom': hours.reverse()
+        if pd.notna(main_row['FixHour']): hours = [int(main_row['FixHour'])]
+
+        for day in days:
+            for start_h in hours:
+                if start_h + dur > 22: continue
+                if self.check_valid(group, sem, day, start_h, dur):
+                    self.commit(group, sem, day, start_h, dur)
+                    return
+        
+        reason = "לא נמצא חלון זמן (או התנגשות)"
+        if pd.notna(main_row['FixDay']): reason += " [אילוץ יום]"
+        self.fail(group, reason)
+
+    def check_valid(self, group, sem, day, start_h, dur):
+        for item in group:
+            lec = item['Lecturer']
+            year = item.get('Year')
+            
+            for h in range(start_h, start_h + dur):
+                # 1. זמינות
+                if lec not in self.avail_db: return False
+                # Fallback: אם אין נתונים לסמסטר הספציפי, נניח שהמרצה לא זמין
+                if sem not in self.avail_db[lec]: return False
+                
+                if day not in self.avail_db[lec][sem]: return False
+                if h not in self.avail_db[lec][sem][day]: return False
+                
+                # 2. התנגשות מערכת
+                for s in self.schedule:
+                    if s['Lecturer'] == lec and s['Day'] == day and s['Hour'] == h and s['Semester'] == sem:
+                        return False
+                
+                # 3. סטודנטים
+                if year and self.is_student_busy(year, sem, day, h):
+                    return False
+        return True
+
+    def commit(self, group, sem, day, start_h, dur):
+        for item in group:
+            for h in range(start_h, start_h + dur):
+                self.schedule.append({
+                    'Year': item.get('Year'),
+                    'Semester': sem,
+                    'Day': day,
+                    'Hour': h,
+                    'Course': item.get('Course'),
+                    'Lecturer': item.get('Lecturer'),
+                    'Space': item.get('Space'),
+                    'LinkID': item.get('LinkID')
+                })
+                if item.get('Year'):
+                    self.set_student_busy(item['Year'], sem, day, h)
+
+    def fail(self, group, reason):
+        for item in group:
+            self.errors.append({
+                'Course': item.get('Course'),
+                'Lecturer': item.get('Lecturer'),
+                'Reason': reason,
+                'LinkID': item.get('LinkID')
+            })
+
+# ================= 4. MAIN =================
+
+def main_process(courses_file, avail_file, iterations=30):
+    if not courses_file or not avail_file: return
+    
+    st.write("---")
+    st.info("🔄 טוען נתונים...")
+    
+    try:
+        # 1. טעינה
+        c_raw = load_uploaded_file(courses_file)
+        a_raw = load_uploaded_file(avail_file)
+        if c_raw is None or a_raw is None: return
+        
+        # 2. עיבוד
+        avail_db, sparsity = preprocess_availability(a_raw)
+        if not avail_db: return
+        
+        courses = preprocess_courses(c_raw)
+        if courses.empty:
+            st.error("קובץ הקורסים לא תקין.")
+            return
+
+        # 3. התאמה
+        # נרמול שמות בקורסים לצורך בדיקה
+        courses['Lecturer'] = courses['Lecturer'].apply(lambda x: " ".join(str(x).split()))
+        
+        valid_lecs = set(avail_db.keys())
+        mask = courses['Lecturer'].isin(valid_lecs)
+        
+        if not mask.all():
+            missing = courses[~mask]['Lecturer'].unique()
+            st.warning(f"⚠️ {len(missing)} מרצים חסרים בקובץ הזמינות (דוגמה: {missing[:3]})")
+            
+        final_courses = courses[mask].copy()
+        if final_courses.empty:
+            st.error("אין קורסים לשיבוץ (0 התאמות). בדוק שהשמות זהים בשני הקבצים.")
+            return
+
+        # 4. הרצה
+        st.success(f"✅ מתחיל שיבוץ ({iterations} איטרציות)...")
+        
+        best_sched = pd.DataFrame()
+        best_errors = pd.DataFrame()
+        min_errors = float('inf')
+        
+        bar = st.progress(0)
+        
+        for i in range(iterations + 1):
+            bar.progress(i / (iterations + 1))
+            sched = Scheduler(final_courses, avail_db, sparsity)
+            s, e = sched.run(shuffle=(i > 0))
+            
+            if len(e) < min_errors:
+                min_errors = len(e)
+                best_sched = s
+                best_errors = e
+                if min_errors == 0: break
+        
+        bar.empty()
+        
+        # 5. תוצאות
+        st.divider()
+        c1, c2 = st.columns(2)
+        c1.metric("✅ שובצו", len(best_sched))
+        c2.metric("❌ לא שובצו", len(best_errors), delta_color="inverse")
+        
+        if not best_sched.empty:
+            st.dataframe(best_sched)
+            st.download_button("📥 הורד מערכת", best_sched.to_csv(index=False).encode('utf-8-sig'), "schedule.csv")
+            
+        if not best_errors.empty:
+            st.error("פירוט שגיאות:")
+            st.dataframe(best_errors)
+            st.download_button("⚠️ הורד שגיאות", best_errors.to_csv(index=False).encode('utf-8-sig'), "errors.csv")
+
+    except Exception:
+        st.error("שגיאה כללית במערכת:")
+        st.code(traceback.format_exc())
+
+if __name__ == "__main__":
+    pass
