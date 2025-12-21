@@ -405,4 +405,84 @@ def main_process(courses_file, avail_file, iterations=30):
             return
 
         # 4. הרצה
-        st.success(f"✅ מתחיל שי
+        st.success(f"✅ מתחיל שיבוץ ({iterations} איטרציות)...")
+        
+        best_sched = pd.DataFrame()
+        best_errors = pd.DataFrame()
+        min_errors = float('inf')
+        
+        bar = st.progress(0)
+        
+        for i in range(iterations + 1):
+            bar.progress(i / (iterations + 1))
+            sched = Scheduler(final_courses, avail_db, sparsity)
+            s, e = sched.run(shuffle=(i > 0))
+            
+            if len(e) < min_errors:
+                min_errors = len(e)
+                best_sched = s
+                best_errors = e
+                if min_errors == 0: break
+        
+        bar.empty()
+        
+        # 5. תוצאות
+        st.divider()
+        c1, c2 = st.columns(2)
+        c1.metric("✅ שובצו", len(best_sched))
+        c2.metric("❌ לא שובצו", len(best_errors), delta_color="inverse")
+        
+        if not best_sched.empty:
+            st.dataframe(best_sched)
+            st.download_button("📥 הורד מערכת", best_sched.to_csv(index=False).encode('utf-8-sig'), "schedule.csv")
+            
+        if not best_errors.empty:
+            st.error("פירוט שגיאות:")
+            st.dataframe(best_errors)
+            st.download_button("⚠️ הורד שגיאות", best_errors.to_csv(index=False).encode('utf-8-sig'), "errors.csv")
+
+        # --- CHAT INTERFACE ---
+        if api_key and HAS_GENAI:
+            st.divider()
+            st.subheader("💬 שוחח עם הנתונים (AI Analyst)")
+            
+            # אתחול צ'אט אם צריך
+            if "gemini_chat" not in st.session_state:
+                st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
+                st.session_state.chat_history = []
+            
+            # אם החליפו API Key, נאתחל מחדש
+            if "last_api_key" not in st.session_state or st.session_state.last_api_key != api_key:
+                 st.session_state.last_api_key = api_key
+                 st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
+                 st.session_state.chat_history = []
+
+            # הצגת היסטוריה
+            for msg in st.session_state.chat_history:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+            
+            # קלט משתמש
+            if prompt := st.chat_input("שאל אותי על השיבוץ (למשל: מתי מלמד יוסי? למה קורס X נכשל?)"):
+                # הצגת הודעת משתמש
+                st.session_state.chat_history.append({"role": "user", "content": prompt})
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                
+                # קבלת תשובה
+                if st.session_state.gemini_chat:
+                    try:
+                        response = st.session_state.gemini_chat.send_message(prompt)
+                        reply = response.text
+                        st.session_state.chat_history.append({"role": "assistant", "content": reply})
+                        with st.chat_message("assistant"):
+                            st.markdown(reply)
+                    except Exception as e:
+                        st.error(f"שגיאה בקבלת תשובה: {e}")
+
+    except Exception:
+        st.error("שגיאה כללית במערכת:")
+        st.code(traceback.format_exc())
+
+if __name__ == "__main__":
+    pass
