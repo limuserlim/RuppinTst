@@ -27,7 +27,7 @@ def clean_semester(val):
     s = str(val).strip().replace("'", "").replace('"', "")
     if s in ['א', 'A', 'a', '1']: return 1
     if s in ['ב', 'B', 'b', '2']: return 2
-    if s in ['ג', 'C', 'c', '3']: return 3
+    if s in ['ג', 'C', '3']: return 3
     try: return int(float(s))
     except: return 1
 
@@ -227,7 +227,8 @@ def init_chat_session(schedule_df, errors_df, api_key):
     if not HAS_GENAI or not api_key: return None
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # שימוש במודל הישן והיציב ביותר כדי למנוע 404
+        model = genai.GenerativeModel("gemini-pro")
         
         csv_sched = schedule_df.to_csv(index=False)
         csv_errors = errors_df.to_csv(index=False)
@@ -240,7 +241,7 @@ def init_chat_session(schedule_df, errors_df, api_key):
 
         chat = model.start_chat(history=[
             {"role": "user", "parts": [prompt]},
-            {"role": "model", "parts": ["אני כאן לעזור בניתוח השיבוץ."]}
+            {"role": "model", "parts": ["אני מנתח הנתונים שלך. מוכן לשאלות."]}
         ])
         return chat
     except Exception as e:
