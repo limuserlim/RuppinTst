@@ -3,39 +3,23 @@ import pandas as pd
 import numpy as np
 import io
 
-# ================= 1. NUCLEAR CLEANING UTILS =================
+# ================= 1. UTILS =================
 
-def safe_str_convert(val):
+def safe_str(val):
     """
-    פונקציית המרה אגרסיבית שמונעת קריסות מסוג unhashable type: dict
+    המרה בטוחה ואגרסיבית למחרוזת כדי למנוע קריסות
     """
     if val is None or pd.isna(val):
         return None
     
-    # אם הערך הוא מילון או רשימה (הגורם לשגיאה) - המר אותו לטקסט
-    if isinstance(val, (dict, list, tuple)):
+    # המרה בכוח של אובייקטים מורכבים למחרוזת
+    if isinstance(val, (dict, list, tuple, set)):
         return str(val)
         
-    # המרה רגילה לטקסט וניקוי רווחים
     s = str(val).strip()
-    if s == "":
+    if s == "" or s.lower() == "nan" or s.lower() == "none":
         return None
     return s
-
-def sanitize_dataframe(df):
-    """
-    עובר על כל העמודות בטבלה ומנקה אובייקטים בעייתיים
-    """
-    if df is None or df.empty:
-        return df
-        
-    # המרה של כל התאים לפורמט בטוח
-    for col in df.columns:
-        # טיפול ספציפי בעמודות שחשודות בבעיות
-        if df[col].dtype == object:
-             df[col] = df[col].apply(safe_str_convert)
-             
-    return df
 
 def parse_availability_string(avail_str):
     slots = set()
@@ -47,16 +31,15 @@ def parse_availability_string(avail_str):
     
     for part in parts:
         part = part.strip()
-        if '-' in part:
-            try:
-                # תמיכה במקרה של מספרים עשרוניים 16.0
+        try:
+            if '-' in part:
                 p_split = part.split('-')
                 start = int(float(p_split[0]))
                 end = int(float(p_split[1]))
                 for h in range(start, end):
                     slots.add(h)
-            except (ValueError, IndexError):
-                continue
+        except (ValueError, IndexError):
+            continue
     return slots
 
 def load_uploaded_file(uploaded_file):
@@ -76,7 +59,7 @@ def load_uploaded_file(uploaded_file):
         st.error(f"שגיאה בטעינת הקובץ: {e}")
         return None
 
-# ================= 2. DATA PROCESSING =================
+# ================= 2. PRE-PROCESSING =================
 
 def preprocess_courses(df):
     """ניקוי ונרמול טבלת קורסים"""
@@ -99,15 +82,22 @@ def preprocess_courses(df):
             
     df = df.rename(columns=col_map)
     
-    # ניקוי "גרעיני" לכל הטבלה כדי למנוע את השגיאה
-    df = sanitize_dataframe(df)
-
+    # בדיקת עמודות חובה
     if 'Course' not in df.columns or 'Lecturer' not in df.columns:
-        return pd.DataFrame()
+        return pd.DataFrame() # החזר ריק
 
     df = df[df['Course'].notna() & df['Lecturer'].notna()]
     
-    # המרות מספריות בטוחות
+    # === התיקון הקריטי: המרת כל עמודות המפתח ל-String בלבד ===
+    # זה מונע את שגיאת unhashable type dict
+    text_cols = ['Course', 'Lecturer', 'Space', 'LinkID', 'Year']
+    for col in text_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(safe_str)
+        else:
+            df[col] = None # יצירת עמודה חסרה
+
+    # המרות מספריות
     for col in ['Duration', 'Semester']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
@@ -116,15 +106,9 @@ def preprocess_courses(df):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
     
-    # מפתח ייחודי
-    if 'Year' in df.columns and 'Semester' in df.columns and 'Course' in df.columns:
-        df['UniqueKey'] = df['Year'].astype(str) + "_" + df['Semester'].astype(str) + "_" + df['Course']
+    # יצירת מפתח ייחודי (בטוח)
+    df['UniqueKey'] = df['Year'].astype(str) + "_" + df['Semester'].astype(str) + "_" + df['Course'].astype(str)
     
-    # הוספת עמודות חסרות כ-None
-    for req in ['LinkID', 'FixDay', 'FixHour', 'Space', 'Year']:
-        if req not in df.columns:
-            df[req] = None
-            
     return df
 
 def preprocess_availability(df):
@@ -145,24 +129,22 @@ def preprocess_availability(df):
         return None, None, None
     
     df = df.rename(columns={lecturer_col: 'Lecturer'})
-    
-    # ניקוי "גרעיני" גם כאן
-    df = sanitize_dataframe(df)
-    
     df = df[df['Lecturer'].notna()]
+    df['Lecturer'] = df['Lecturer'].apply(safe_str)
     
     availability_db = {}
     lecturer_sparsity = {}
     
     for _, row in df.iterrows():
         lecturer = row['Lecturer']
+        if not lecturer: continue
+        
         availability_db[lecturer] = {}
         total_slots = 0
         
         for col in df.columns:
             if col == 'Lecturer' or 'time' in str(col).lower(): continue
             
-            # זיהוי עמודות XY (יום+סמסטר)
             col_str = str(col).strip()
             if len(col_str) >= 2 and col_str[:2].isdigit():
                 try:
@@ -187,7 +169,6 @@ def preprocess_availability(df):
 def get_schedule_waves(df, sparsity_scores):
     df['Sparsity'] = df['Lecturer'].map(sparsity_scores).fillna(0)
     
-    # חלוקה לגלים
     wave_a = df[df['LinkID'].notna() & (df['FixDay'].notna() | df['FixHour'].notna())].copy()
     wave_b = df[df['LinkID'].isna() & (df['FixDay'].notna() | df['FixHour'].notna())].copy()
     wave_c = df[df['LinkID'].notna() & df['FixDay'].isna() & df['FixHour'].isna()].copy()
@@ -221,7 +202,6 @@ class SchoolScheduler:
             semester = int(row['Semester'])
         except: return None, None
         
-        # אילוצים קשיחים
         fixed_days = [int(row['FixDay'])] if pd.notna(row['FixDay']) else [1,2,3,4,5]
         
         hours = list(self.hours_range)
@@ -238,22 +218,21 @@ class SchoolScheduler:
                 for item in rows_to_check:
                     l_item = item['Lecturer']
                     
-                    # בדיקת טווח השעות
                     for h in range(start_h, start_h + duration):
-                        # 1. זמינות מרצה
+                        # 1. Lecturer Availability
                         if l_item not in self.avail_db or \
                            semester not in self.avail_db[l_item] or \
                            day not in self.avail_db[l_item][semester] or \
                            h not in self.avail_db[l_item][semester][day]:
                             valid = False; break
                         
-                        # 2. האם המרצה כבר משובץ?
+                        # 2. Lecturer Clash
                         for s in self.schedule:
                             if s['Lecturer'] == l_item and s['Day'] == day and s['Hour'] == h and s['Semester'] == semester:
                                 valid = False; break
                         if not valid: break
                         
-                        # 3. האם הסטודנטים תפוסים?
+                        # 3. Student Clash
                         y_item = item.get('Year')
                         if y_item and self.is_student_busy(y_item, semester, day, h):
                             valid = False; break
@@ -289,13 +268,13 @@ class SchoolScheduler:
             bar.progress((i + 1) / 4)
             for _, row in wave.iterrows():
                 try:
-                    # הגנה מפני מפתחות לא חוקיים בסט
-                    lid = row.get('LinkID')
-                    
-                    # וידוא ש-lid הוא לא מילון/רשימה לפני בדיקה ב-set
-                    if isinstance(lid, (dict, list)):
-                        lid = str(lid)
-                    
+                    # מנגנון הגנה משולש מפני dict
+                    raw_lid = row.get('LinkID')
+                    if isinstance(raw_lid, (dict, list)):
+                        lid = str(raw_lid)
+                    else:
+                        lid = raw_lid
+                        
                     if pd.notna(lid) and lid in processed_links:
                         continue
                         
@@ -325,9 +304,7 @@ class SchoolScheduler:
                                 'LinkID': item.get('LinkID')
                             })
                             
-                except Exception as e:
-                    # תפיסת שגיאות כדי למנוע קריסה מוחלטת
-                    # print(f"Row Error: {e}") 
+                except Exception:
                     continue
                     
         bar.empty()
@@ -359,7 +336,10 @@ def main_process(courses_file, avail_file, iterations=20):
 
     # Check Intersection
     valid_lecs = set(avail_db.keys())
-    mask = courses_clean['Lecturer'].isin(valid_lecs)
+    # הגנה נוספת לוודא שאין dicts בתוך שם המרצה
+    safe_lecs = courses_clean['Lecturer'].apply(lambda x: x if isinstance(x, str) else str(x))
+    
+    mask = safe_lecs.isin(valid_lecs)
     removed = courses_clean[~mask]
     if not removed.empty:
         st.warning(f"תשומת לב: הוסרו {len(removed)} קורסים כי למרצה אין נתוני זמינות.")
