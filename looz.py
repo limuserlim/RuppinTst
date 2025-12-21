@@ -3,54 +3,53 @@ import pandas as pd
 import numpy as np
 import io
 
-# ================= 1. HELPER FUNCTIONS & CLEANING =================
+# ================= 1. HELPER FUNCTIONS =================
 
 def clean_text(text):
-    """ניקוי רווחים, הסרת רווחים כפולים והמרה למחרוזת"""
+    """ניקוי רווחים והמרה בטוחה למחרוזת"""
     if pd.isna(text) or str(text).strip() == "":
         return None
-    text = str(text).strip()
-    return " ".join(text.split())
+    return " ".join(str(text).strip().split())
+
+def safe_str(val):
+    """המרה בטוחה למחרוזת שמונעת שגיאות dict/list"""
+    if pd.isna(val):
+        return None
+    if isinstance(val, (dict, list, tuple)):
+        return str(val) # הופך מבנה מורכב למחרוזת פשוטה
+    return str(val).strip()
 
 def parse_availability_string(avail_str):
-    """
-    מפענח מחרוזת כמו '16-17, 17-18' לסט של שעות בודדות.
-    Strict Parsing: רק מה שכתוב מפורשות נחשב פנוי.
-    """
+    """Strict Parsing: רק מה שכתוב מפורשות נחשב פנוי"""
     slots = set()
     if pd.isna(avail_str):
         return slots
     
-    # ניקוי והפרדה
-    parts = str(avail_str).replace(';', ',').split(',')
+    # המרה למחרוזת ליתר ביטחון
+    s = str(avail_str).replace(';', ',')
+    parts = s.split(',')
     
     for part in parts:
         part = part.strip()
         if '-' in part:
             try:
-                # פירוק טווח שעות
-                if '-' in part:
-                    start_s, end_s = part.split('-')
-                    start = int(start_s)
-                    end = int(end_s)
-                    # הטווח הוא [start, end), כלומר 16-17 נותן את שעה 16
-                    for h in range(start, end):
-                        slots.add(h)
+                # תמיכה בפורמט 16-18
+                start_s, end_s = part.split('-')
+                start = int(float(start_s)) # float למקרה שיש 16.0
+                end = int(float(end_s))
+                for h in range(start, end):
+                    slots.add(h)
             except ValueError:
                 continue
     return slots
 
 def load_uploaded_file(uploaded_file):
-    """טעינת קובץ שהועלה ב-Streamlit"""
+    """טעינת קובץ עם טיפול בקידודים"""
     if uploaded_file is None:
         return None
-    
     try:
-        # בדיקה אם זהו אובייקט Streamlit UploadedFile
         filename = getattr(uploaded_file, 'name', 'unknown.xlsx')
-        
         if filename.endswith('.csv'):
-            # ניסיון קידודים שונים לקבצי CSV
             try:
                 return pd.read_csv(uploaded_file, encoding='utf-8')
             except UnicodeDecodeError:
@@ -62,96 +61,84 @@ def load_uploaded_file(uploaded_file):
         st.error(f"שגיאה בטעינת הקובץ: {e}")
         return None
 
-# ================= 2. PRE-PROCESSING & VALIDATION =================
+# ================= 2. DATA PROCESSING =================
 
 def preprocess_courses(df):
     """ניקוי ונרמול טבלת קורסים"""
-    # הסרת שורות רפאים
     df = df.dropna(how='all')
-    
-    # וידוא שמות עמודות נקיים
     df.columns = df.columns.str.strip()
     
-    # מיפוי גמיש לעמודות הקורסים
+    # מיפוי עמודות חכם
     col_map = {}
     for col in df.columns:
         c_lower = str(col).lower().strip()
-        if 'קורס' in c_lower or 'course' in c_lower:
-            col_map[col] = 'Course'
-        elif 'מרצה' in c_lower or 'lecturer' in c_lower:
-            col_map[col] = 'Lecturer'
-        elif 'סמסטר' in c_lower or 'semester' in c_lower:
-            col_map[col] = 'Semester'
-        elif 'משך' in c_lower or 'duration' in c_lower or 'שעות' in c_lower:
-            col_map[col] = 'Duration'
-        elif 'מרחב' in c_lower or 'space' in c_lower or 'location' in c_lower:
-            col_map[col] = 'Space'
-        elif 'יום' in c_lower or 'day' in c_lower:
-            col_map[col] = 'FixDay'
-        elif 'שעה' in c_lower or 'hour' in c_lower:
-            col_map[col] = 'FixHour'
-        elif 'שנה' in c_lower or 'year' in c_lower:
-            col_map[col] = 'Year'
-        elif 'קישור' in c_lower or 'link' in c_lower:
-            col_map[col] = 'LinkID'
+        if 'קורס' in c_lower or 'course' in c_lower: col_map[col] = 'Course'
+        elif 'מרצה' in c_lower or 'lecturer' in c_lower: col_map[col] = 'Lecturer'
+        elif 'סמסטר' in c_lower or 'semester' in c_lower: col_map[col] = 'Semester'
+        elif 'משך' in c_lower or 'duration' in c_lower or 'שעות' in c_lower: col_map[col] = 'Duration'
+        elif 'מרחב' in c_lower or 'space' in c_lower or 'location' in c_lower: col_map[col] = 'Space'
+        elif 'יום' in c_lower or 'day' in c_lower: col_map[col] = 'FixDay'
+        elif 'שעה' in c_lower or 'hour' in c_lower: col_map[col] = 'FixHour'
+        elif 'שנה' in c_lower or 'year' in c_lower: col_map[col] = 'Year'
+        elif 'קישור' in c_lower or 'link' in c_lower: col_map[col] = 'LinkID'
             
     df = df.rename(columns=col_map)
     
-    # סינון שורות ללא שם קורס או מרצה
-    if 'Course' in df.columns and 'Lecturer' in df.columns:
-        df = df[df['Course'].notna() & df['Lecturer'].notna()]
+    # וידוא עמודות חובה
+    if 'Course' not in df.columns or 'Lecturer' not in df.columns:
+        return pd.DataFrame() # החזר ריק אם אין עמודות חובה
+
+    df = df[df['Course'].notna() & df['Lecturer'].notna()]
     
-    # נרמול טקסט בתוכן
+    # === ניקוי נתונים קריטי ===
     for col in ['Course', 'Lecturer', 'Space']:
         if col in df.columns:
             df[col] = df[col].apply(clean_text)
 
-    # === תיקון קריטי לשגיאת unhashable type: 'dict' ===
-    # המרה אגרסיבית של LinkID למחרוזת בלבד
+    # טיפול מיוחד ב-LinkID למניעת שגיאת unhashable type: dict
     if 'LinkID' in df.columns:
-        df['LinkID'] = df['LinkID'].apply(lambda x: str(x).strip() if pd.notna(x) else None)
+        df['LinkID'] = df['LinkID'].apply(safe_str)
+    else:
+        df['LinkID'] = None # הוספה אם חסר
             
-    # המרות טיפוסים
-    if 'Duration' in df.columns:
-        df['Duration'] = pd.to_numeric(df['Duration'], errors='coerce').fillna(0).astype(int)
-    if 'Semester' in df.columns:
-        df['Semester'] = pd.to_numeric(df['Semester'], errors='coerce').fillna(0).astype(int)
-    if 'FixDay' in df.columns:
-        df['FixDay'] = pd.to_numeric(df['FixDay'], errors='coerce').astype('Int64') 
-    if 'FixHour' in df.columns:
-        df['FixHour'] = pd.to_numeric(df['FixHour'], errors='coerce').astype('Int64')
+    # המרות מספריות בטוחות
+    for col in ['Duration', 'Semester']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+            
+    for col in ['FixDay', 'FixHour']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
     
-    # יצירת מפתח ייחודי
+    # מפתח ייחודי
     if 'Year' in df.columns and 'Semester' in df.columns and 'Course' in df.columns:
         df['UniqueKey'] = df['Year'].astype(str) + "_" + df['Semester'].astype(str) + "_" + df['Course']
     
     return df
 
 def preprocess_availability(df):
-    """עיבוד טבלת זמינות למבנה נח"""
+    """עיבוד טבלת זמינות"""
     df = df.dropna(how='all')
     df.columns = df.columns.str.strip()
     
-    # זיהוי חכם של עמודת שם המרצה
-    potential_keywords = ['מרצה', 'שם', 'lecturer', 'name', 'teacher']
-    lecturer_col_name = None
-    
-    for keyword in potential_keywords:
-        matches = [c for c in df.columns if keyword.lower() in str(c).lower()]
+    # זיהוי עמודת מרצה
+    lecturer_col = None
+    for kw in ['מרצה', 'שם', 'lecturer', 'name']:
+        matches = [c for c in df.columns if kw.lower() in str(c).lower()]
         if matches:
-            lecturer_col_name = matches[0]
+            lecturer_col = matches[0]
             break
             
-    if not lecturer_col_name:
-        st.error(f"❌ לא נמצאה עמודת 'שם מרצה'. העמודות שזוהו: {list(df.columns)}")
+    if not lecturer_col:
+        st.error(f"לא נמצאה עמודת שם מרצה. העמודות הן: {list(df.columns)}")
         return None, None, None
     
-    df = df.rename(columns={lecturer_col_name: 'Lecturer'})
+    df = df.rename(columns={lecturer_col: 'Lecturer'})
     df = df[df['Lecturer'].notna()]
     df['Lecturer'] = df['Lecturer'].apply(clean_text)
     
     availability_db = {}
-    lecturer_sparsity = {} 
+    lecturer_sparsity = {}
     
     for _, row in df.iterrows():
         lecturer = row['Lecturer']
@@ -159,71 +146,45 @@ def preprocess_availability(df):
         total_slots = 0
         
         for col in df.columns:
-            if col == 'Lecturer' or str(col).lower() == 'timestamp': continue
+            if col == 'Lecturer' or 'time' in str(col).lower(): continue
             
-            if len(str(col)) >= 2 and str(col)[:2].isdigit():
+            # זיהוי עמודות XY (יום+סמסטר)
+            col_str = str(col).strip()
+            if len(col_str) >= 2 and col_str[:2].isdigit():
                 try:
-                    digits = str(col)[:2]
-                    day = int(digits[0])
-                    semester = int(digits[1])
-                    
-                    if 1 <= day <= 7: 
+                    day = int(col_str[0])
+                    semester = int(col_str[1])
+                    if 1 <= day <= 7:
                         slots = parse_availability_string(row[col])
-                        if not slots: continue 
-                        
-                        if semester not in availability_db[lecturer]:
-                            availability_db[lecturer][semester] = {}
-                        
-                        availability_db[lecturer][semester][day] = slots
-                        total_slots += len(slots)
-                except ValueError:
+                        if slots:
+                            if semester not in availability_db[lecturer]:
+                                availability_db[lecturer][semester] = {}
+                            availability_db[lecturer][semester][day] = slots
+                            total_slots += len(slots)
+                except:
                     continue
         
         lecturer_sparsity[lecturer] = total_slots
-
+        
     return availability_db, lecturer_sparsity, df
 
-# ================= 3. CORE LOGIC & SCHEDULING =================
-
-def check_strict_intersection(courses_df, avail_db):
-    valid_lecturers = set(avail_db.keys())
-    if 'Lecturer' not in courses_df.columns:
-        return courses_df
-        
-    missing_mask = ~courses_df['Lecturer'].isin(valid_lecturers)
-    missing_courses = courses_df[missing_mask]
-    
-    if not missing_courses.empty:
-        st.warning(f"⚠️ תשומת לב: הוסרו {len(missing_courses)} קורסים כי למרצים שלהם אין קובץ זמינות.")
-        
-    return courses_df[~missing_mask].copy()
-
-def check_unique_integrity(courses_df):
-    if 'UniqueKey' not in courses_df.columns:
-        return True
-        
-    dupes = courses_df[courses_df.duplicated(subset='UniqueKey', keep=False)]
-    if not dupes.empty:
-        st.error("🛑 שגיאה קריטית: נמצאו קורסים כפולים (אותו שם, שנה וסמסטר).")
-        st.dataframe(dupes[['Course', 'Year', 'Semester']])
-        return False
-    return True
+# ================= 3. SCHEDULER ENGINE =================
 
 def get_schedule_waves(df, sparsity_scores):
-    expected_cols = ['LinkID', 'FixDay', 'FixHour', 'Lecturer', 'Duration', 'Sparsity']
-    for c in expected_cols:
-        if c not in df.columns:
-            df[c] = None 
-
+    # וידוא שכל העמודות קיימות
+    for c in ['LinkID', 'FixDay', 'FixHour', 'Sparsity']:
+        if c not in df.columns: df[c] = None
+        
     df['Sparsity'] = df['Lecturer'].map(sparsity_scores).fillna(0)
     
+    # חלוקה לגלים
     wave_a = df[df['LinkID'].notna() & (df['FixDay'].notna() | df['FixHour'].notna())].copy()
     wave_b = df[df['LinkID'].isna() & (df['FixDay'].notna() | df['FixHour'].notna())].copy()
     wave_c = df[df['LinkID'].notna() & df['FixDay'].isna() & df['FixHour'].isna()].copy()
     
     remaining = df.drop(wave_a.index).drop(wave_b.index).drop(wave_c.index)
     wave_d_e = remaining.sort_values(by=['Sparsity', 'Duration'], ascending=[True, False])
-
+    
     return [wave_a, wave_b, wave_c, wave_d_e]
 
 class SchoolScheduler:
@@ -232,241 +193,198 @@ class SchoolScheduler:
         self.avail_db = avail_db
         self.schedule = []
         self.unscheduled = []
-        self.student_busy = {} 
+        self.student_busy = {} # Year -> Sem -> Day -> Hour -> bool
         self.hours_range = range(8, 22)
         
     def is_student_busy(self, year, semester, day, hour):
         return self.student_busy.get(year, {}).get(semester, {}).get(day, {}).get(hour, False)
-    
+        
     def mark_student_busy(self, year, semester, day, hour):
         if year not in self.student_busy: self.student_busy[year] = {}
         if semester not in self.student_busy[year]: self.student_busy[year][semester] = {}
         if day not in self.student_busy[year][semester]: self.student_busy[year][semester][day] = {}
         self.student_busy[year][semester][day][hour] = True
 
-    def is_lecturer_available(self, lecturer, semester, day, hour):
-        if lecturer not in self.avail_db: return False
-        if semester not in self.avail_db[lecturer]: return False
-        if day not in self.avail_db[lecturer][semester]: return False
-        return hour in self.avail_db[lecturer][semester][day]
-    
-    def is_lecturer_busy_in_schedule(self, lecturer, semester, day, hour):
-        for s in self.schedule:
-            if s['Lecturer'] == lecturer and s['Semester'] == semester and s['Day'] == day and s['Hour'] == hour:
-                return True
-        return False
-
-    def find_slot(self, course_row, linked_courses=None):
-        lecturer = course_row['Lecturer']
+    def find_slot(self, row, group_rows=None):
+        lecturer = row['Lecturer']
         try:
-            duration = int(float(course_row['Duration']))
-            semester = int(float(course_row['Semester']))
-        except (ValueError, TypeError):
-            return None, None
-            
-        year = course_row['Year']
-        space = course_row['Space']
-        fix_day = course_row['FixDay']
-        fix_hour = course_row['FixHour']
+            duration = int(row['Duration'])
+            semester = int(row['Semester'])
+        except: return None, None
         
-        days_to_check = [1, 2, 3, 4, 5]
-        if pd.notna(fix_day):
-            try:
-                days_to_check = [int(float(fix_day))]
-            except: pass
-            
-        hours_search = list(self.hours_range)
-        if str(space).lower() == 'zoom':
-            hours_search = sorted(hours_search, reverse=True)
-            
-        if pd.notna(fix_hour):
-            try:
-                hours_search = [int(float(fix_hour))]
-            except: pass
+        year = row.get('Year', 'Unk')
+        space = row.get('Space', '')
+        
+        # אילוצים קשיחים
+        fixed_days = [int(row['FixDay'])] if pd.notna(row['FixDay']) else [1,2,3,4,5]
+        
+        hours = list(self.hours_range)
+        if str(space).lower() == 'zoom': hours.reverse() # זום מהסוף
+        if pd.notna(row['FixHour']): hours = [int(row['FixHour'])]
 
-        for day in days_to_check:
-            for start_h in hours_search:
+        rows_to_check = group_rows if group_rows else [row]
+
+        for day in fixed_days:
+            for start_h in hours:
                 if start_h + duration > 22: continue
-
-                valid_slot = True
-                group_to_check = [course_row] if linked_courses is None else linked_courses
                 
-                for current_course in group_to_check:
-                    c_lecturer = current_course['Lecturer']
-                    c_year = current_course['Year']
+                valid = True
+                # בדיקה לכל הקורסים בקבוצה (או לקורס הבודד)
+                for item in rows_to_check:
+                    l_item = item['Lecturer']
+                    y_item = item.get('Year', 'Unk')
                     
+                    # בדיקת טווח השעות
                     for h in range(start_h, start_h + duration):
-                        if not self.is_lecturer_available(c_lecturer, semester, day, h):
-                            valid_slot = False; break
-                        if self.is_lecturer_busy_in_schedule(c_lecturer, semester, day, h):
-                            valid_slot = False; break
-                        if self.is_student_busy(c_year, semester, day, h):
-                            valid_slot = False; break
-                    if not valid_slot: break
+                        # 1. זמינות מרצה
+                        if l_item not in self.avail_db or \
+                           semester not in self.avail_db[l_item] or \
+                           day not in self.avail_db[l_item][semester] or \
+                           h not in self.avail_db[l_item][semester][day]:
+                            valid = False; break
+                        
+                        # 2. האם המרצה כבר משובץ?
+                        for s in self.schedule:
+                            if s['Lecturer'] == l_item and s['Day'] == day and s['Hour'] == h and s['Semester'] == semester:
+                                valid = False; break
+                        if not valid: break
+                        
+                        # 3. האם הסטודנטים תפוסים?
+                        if self.is_student_busy(y_item, semester, day, h):
+                            valid = False; break
+                    
+                    if not valid: break
                 
-                if valid_slot:
-                    return day, start_h
+                if valid: return day, start_h
         return None, None
 
-    def commit_schedule(self, course_row, day, start_hour):
-        duration = int(float(course_row['Duration']))
-        for h in range(start_hour, start_hour + duration):
+    def commit(self, row, day, start_h):
+        dur = int(row['Duration'])
+        for h in range(start_h, start_h + dur):
             self.schedule.append({
-                'Year': course_row['Year'],
-                'Semester': course_row['Semester'],
+                'Year': row.get('Year'),
+                'Semester': row.get('Semester'),
                 'Day': day,
                 'Hour': h,
-                'Course': course_row['Course'],
-                'Lecturer': course_row['Lecturer'],
-                'Space': course_row['Space'],
-                'UniqueKey': course_row.get('UniqueKey')
+                'Course': row.get('Course'),
+                'Lecturer': row.get('Lecturer'),
+                'Space': row.get('Space'),
+                'LinkID': row.get('LinkID')
             })
-            self.mark_student_busy(course_row['Year'], course_row['Semester'], day, h)
+            self.mark_student_busy(row.get('Year'), row.get('Semester'), day, h)
 
     def run(self):
         waves = get_schedule_waves(self.courses, self.avail_db)
-        processed_link_ids = set()
+        processed_links = set()
         
-        progress_bar = st.progress(0)
-        total_waves = len(waves)
-
-        for wave_idx, wave_df in enumerate(waves):
-            progress_bar.progress((wave_idx + 1) / total_waves)
-            
-            for _, row in wave_df.iterrows():
+        bar = st.progress(0)
+        
+        for i, wave in enumerate(waves):
+            bar.progress((i + 1) / 4)
+            for _, row in wave.iterrows():
                 try:
-                    link_id = row['LinkID']
-                    # וידוא ש-link_id הוא מחרוזת פשוטה
-                    if isinstance(link_id, (dict, list)):
-                        link_id = str(link_id)
-
-                    if pd.notna(link_id) and link_id in processed_link_ids:
+                    # טיפול ב-LinkID
+                    lid = row['LinkID']
+                    if pd.notna(lid) and lid in processed_links:
                         continue
-                    
-                    group_rows = None
-                    if pd.notna(link_id):
-                        group_rows = self.courses[self.courses['LinkID'] == link_id].to_dict('records')
-                        processed_link_ids.add(link_id)
-                    
-                    day, start_h = self.find_slot(row, linked_courses=group_rows)
+                        
+                    group = None
+                    if pd.notna(lid):
+                        group = self.courses[self.courses['LinkID'] == lid].to_dict('records')
+                        processed_links.add(lid)
+                        
+                    day, start_h = self.find_slot(row, group)
                     
                     if day is not None:
-                        if group_rows:
-                            for g_row in group_rows:
-                                self.commit_schedule(g_row, day, start_h)
+                        if group:
+                            for g_item in group: self.commit(g_item, day, start_h)
                         else:
-                            self.commit_schedule(row, day, start_h)
+                            self.commit(row, day, start_h)
                     else:
-                        reason = "No Slot (Constraints/Overlap)"
-                        if pd.notna(row['FixDay']): reason += " [Fixed Day]"
+                        # דיווח על כישלון
+                        items = group if group else [row]
+                        reason = "No Slot found"
+                        if pd.notna(row['FixDay']): reason += " (Fixed Constraint)"
                         
-                        items_to_fail = group_rows if group_rows else [row]
-                        
-                        for item in items_to_fail:
-                            # טיפול בטוח באובייקט
-                            if isinstance(item, pd.Series):
-                                item = item.to_dict()
-                                
+                        for item in items:
+                            # המרה למילון אם זה Pandas Series
+                            if isinstance(item, pd.Series): item = item.to_dict()
+                            
                             self.unscheduled.append({
                                 'Course': item.get('Course'),
                                 'Lecturer': item.get('Lecturer'),
                                 'Reason': reason,
                                 'LinkID': item.get('LinkID')
                             })
+                            
                 except Exception as e:
-                    # תפיסת שגיאות נקודתיות כדי לא להקריס את הכל
-                    print(f"Error processing row: {e}")
+                    print(f"Error in row: {e}")
                     continue
-        
-        progress_bar.empty()
+                    
+        bar.empty()
         return pd.DataFrame(self.schedule), pd.DataFrame(self.unscheduled)
 
-# ================= 4. MAIN PROCESS WRAPPER =================
+# ================= 4. MAIN ENTRY POINT =================
 
 def main_process(courses_file, avail_file, iterations=20):
-    # הסרתי את st.file_uploader כדי למנוע כפילות
     if not courses_file or not avail_file:
-        # הודעה שקטה אם הקבצים טרם הועלו
-        st.info("אנא העלה את קבצי הקורסים והזמינות בתפריט למעלה ולחץ על התחל.")
         return
 
     st.write("---")
-    st.info(f"מתחיל בעיבוד נתונים... (Strict Mode)")
+    st.info("🔄 מעבד נתונים...")
+
+    # Load
+    c_raw = load_uploaded_file(courses_file)
+    a_raw = load_uploaded_file(avail_file)
     
-    # Load Data
-    courses_raw = load_uploaded_file(courses_file)
-    avail_raw = load_uploaded_file(avail_file)
+    if c_raw is None or a_raw is None: return
+
+    # Process
+    avail_db, scores, _ = preprocess_availability(a_raw)
+    if not avail_db: return
     
-    if courses_raw is not None and avail_raw is not None:
+    courses_clean = preprocess_courses(c_raw)
+    if courses_clean.empty:
+        st.error("לא נמצאו קורסים תקינים בקובץ.")
+        return
+
+    # Check Intersection
+    # סינון קורסים שאין להם מרצה זמין
+    valid_lecs = set(avail_db.keys())
+    mask = courses_clean['Lecturer'].isin(valid_lecs)
+    removed = courses_clean[~mask]
+    if not removed.empty:
+        st.warning(f"הוסרו {len(removed)} קורסים כי למרצה אין נתוני זמינות.")
         
-        avail_db, sparsity, avail_cleaned_df = preprocess_availability(avail_raw)
+    courses_ready = courses_clean[mask].copy()
+    
+    if courses_ready.empty:
+        st.error("אין קורסים לשיבוץ.")
+        return
+
+    # Run
+    st.success("✅ נתונים תקינים. מריץ שיבוץ...")
+    scheduler = SchoolScheduler(courses_ready, avail_db)
+    sched_df, err_df = scheduler.run()
+    
+    # Results
+    st.markdown("### 📊 תוצאות")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("שובצו", len(sched_df))
+    col2.metric("נכשלו", len(err_df), delta_color="inverse")
+    
+    if not sched_df.empty:
+        st.dataframe(sched_df)
+        st.download_button("📥 הורד מערכת (CSV)", 
+                           sched_df.to_csv(index=False).encode('utf-8-sig'), 
+                           "schedule.csv", "text/csv")
         
-        if avail_db is None: 
-            return
-            
-        courses_processed = preprocess_courses(courses_raw)
-        
-        if courses_processed.empty:
-            st.error("❌ לא נמצאו קורסים תקינים לעיבוד.")
-            return
-
-        if check_unique_integrity(courses_processed):
-            courses_ready = check_strict_intersection(courses_processed, avail_db)
-            
-            if courses_ready.empty:
-                st.error("❌ אין קורסים לשיבוץ לאחר חיתוך עם המרצים הזמינים.")
-                return
-
-            st.success("✅ הנתונים תקינים. מריץ אלגוריתם שיבוץ...")
-            scheduler = SchoolScheduler(courses_ready, avail_db)
-            final_schedule, unscheduled_report = scheduler.run()
-            
-            # ================== DISPLAY RESULTS ==================
-            
-            st.markdown("### 📊 סיכום שיבוץ")
-            col_m1, col_m2, col_m3 = st.columns(3)
-            
-            num_scheduled = len(final_schedule)
-            num_failed = len(unscheduled_report)
-            total_items = num_scheduled + num_failed
-            success_rate = (num_scheduled / total_items * 100) if total_items > 0 else 0
-            
-            col_m1.metric("שיעורים ששובצו", num_scheduled)
-            col_m2.metric("שיעורים שנכשלו", num_failed, delta_color="inverse")
-            col_m3.metric("אחוז הצלחה", f"{success_rate:.1f}%")
-
-            if not final_schedule.empty:
-                st.markdown("### 🗓️ מערכת שעות סופית")
-                st.dataframe(final_schedule, use_container_width=True)
-
-            col_d1, col_d2 = st.columns(2)
-            
-            with col_d1:
-                if not final_schedule.empty:
-                    csv_sched = final_schedule.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button(
-                        label="📥 הורד קובץ מערכת סופי (CSV)",
-                        data=csv_sched,
-                        file_name="Final_Schedule.csv",
-                        mime="text/csv",
-                        key='dl_sched'
-                    )
-            
-            with col_d2:
-                if not unscheduled_report.empty:
-                    csv_err = unscheduled_report.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button(
-                        label="⚠️ הורד דוח שגיאות (CSV)",
-                        data=csv_err,
-                        file_name="Unscheduled_Report.csv",
-                        mime="text/csv",
-                        key='dl_err'
-                    )
-            
-            if not unscheduled_report.empty:
-                st.markdown("---")
-                st.error("⚠️ פירוט שגיאות (קורסים שלא שובצו)")
-                st.dataframe(unscheduled_report, use_container_width=True)
+    if not err_df.empty:
+        st.error("חלק מהקורסים לא שובצו:")
+        st.dataframe(err_df)
+        st.download_button("⚠️ הורד שגיאות (CSV)", 
+                           err_df.to_csv(index=False).encode('utf-8-sig'), 
+                           "errors.csv", "text/csv")
 
 if __name__ == "__main__":
-    st.warning("הפעל את המערכת דרך menu.py")
+    st.warning("Run via menu.py")
