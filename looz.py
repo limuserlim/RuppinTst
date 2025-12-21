@@ -242,7 +242,7 @@ def init_chat_session(schedule_df, errors_df, api_key):
     Answer ONLY based on this data. Use Hebrew.
     """
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash", generation_config=generation_config)
+        model = genai.GenerativeModel("gemini-pro", generation_config=generation_config)
         return model.start_chat(history=[{"role": "user", "parts": prompt}, {"role": "model", "parts": "אני כאן."}])
     except: return None
 
@@ -366,3 +366,4 @@ def main_process(courses_file, avail_file, iterations=30):
 
 if __name__ == "__main__":
     pass
+
