@@ -6,12 +6,20 @@ import traceback
 
 # ================= 1. UTILS =================
 
-def force_to_string(val):
-    """המרה אגרסיבית לטקסט למניעת קריסות מאובייקטים מורכבים"""
+def safe_str(val):
+    """
+    המרה "כוחנית" לטקסט.
+    מנטרלת מילונים, רשימות וכל אובייקט שאינו טקסט פשוט.
+    """
     if val is None or pd.isna(val):
         return None
     try:
-        return str(val).strip()
+        if isinstance(val, (dict, list, tuple, set)):
+            return str(val) # הופך את המבנה למחרוזת שטוחה
+        s = str(val).strip()
+        if s.lower() in ['nan', 'none', '']:
+            return None
+        return s
     except:
         return ""
 
@@ -50,23 +58,27 @@ def parse_availability(row, cols):
             for p in parts:
                 p = p.strip()
                 if '-' in p:
-                    # טיפול בפורמט "08-10"
                     p_split = p.split('-')
                     start = int(float(p_split[0]))
                     end = int(float(p_split[1]))
                     for h in range(start, end):
                         yield (semester, day, h)
-        except (ValueError, IndexError):
+        except:
             continue
 
-# ================= 2. PRE-PROCESSING =================
+# ================= 2. PRE-PROCESSING (CLEAN ROOM) =================
 
 def preprocess_courses(df):
-    """ניקוי ונרמול קורסים"""
+    """
+    בנייה מחדש של טבלת הקורסים (Clean Room Approach)
+    מונע לחלוטין כניסת עמודות זבל או אובייקטים מורכבים.
+    """
+    if df is None or df.empty: return pd.DataFrame()
+    
     df = df.dropna(how='all')
     df.columns = df.columns.str.strip()
     
-    # מיפוי עמודות
+    # 1. זיהוי עמודות
     col_map = {}
     for col in df.columns:
         c = str(col).lower().strip()
@@ -83,40 +95,51 @@ def preprocess_courses(df):
             
     df = df.rename(columns=col_map)
     
-    # בדיקת עמודות חובה
     if 'Course' not in df.columns or 'Lecturer' not in df.columns:
-        return pd.DataFrame()
+        return pd.DataFrame() # חסר מידע קריטי
 
     df = df[df['Course'].notna() & df['Lecturer'].notna()]
     
-    # השלמת עמודות חסרות (למניעת KeyError)
-    for req in ['Duration', 'Semester', 'FixDay', 'FixHour', 'LinkID', 'Space', 'Year']:
-        if req not in df.columns:
-            df[req] = None
-
-    # === המרה אגרסיבית לטקסט למניעת קריסות ===
+    # 2. יצירת DataFrame חדש ונקי (מונע גרירת זבל מהאקסל המקורי)
+    clean_df = pd.DataFrame()
+    
+    # העתקת עמודות טקסט עם המרה בטוחה
     text_cols = ['Course', 'Lecturer', 'Space', 'LinkID', 'Year']
     for col in text_cols:
-        df[col] = df[col].apply(force_to_string)
+        if col in df.columns:
+            clean_df[col] = df[col].apply(safe_str)
+        else:
+            clean_df[col] = None
 
-    # המרות מספריות בטוחות
-    # Duration: ברירת מחדל 2 אם חסר
-    df['Duration'] = pd.to_numeric(df['Duration'], errors='coerce').fillna(2).astype(int)
-    
-    # Semester: ברירת מחדל 1 אם חסר
-    df['Semester'] = pd.to_numeric(df['Semester'], errors='coerce').fillna(1).astype(int)
-            
+    # העתקת עמודות מספריות עם המרה בטוחה
+    # Duration
+    if 'Duration' in df.columns:
+        clean_df['Duration'] = pd.to_numeric(df['Duration'], errors='coerce').fillna(2).astype(int)
+    else:
+        clean_df['Duration'] = 2
+        
+    # Semester
+    if 'Semester' in df.columns:
+        clean_df['Semester'] = pd.to_numeric(df['Semester'], errors='coerce').fillna(1).astype(int)
+    else:
+        clean_df['Semester'] = 1
+        
+    # Fixed Constraints
     for col in ['FixDay', 'FixHour']:
-        df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
-            
-    return df
+        if col in df.columns:
+            clean_df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+        else:
+            clean_df[col] = None
+
+    # איפוס אינדקס כדי למנוע בעיות באינדקסים
+    clean_df = clean_df.reset_index(drop=True)
+    
+    return clean_df
 
 def preprocess_availability(df):
-    """עיבוד טבלת זמינות"""
     df = df.dropna(how='all')
     df.columns = df.columns.str.strip()
     
-    # זיהוי עמודת שם מרצה
     lecturer_col = None
     for kw in ['מרצה', 'שם', 'lecturer', 'name']:
         matches = [c for c in df.columns if kw in str(c).lower()]
@@ -125,14 +148,15 @@ def preprocess_availability(df):
             break
             
     if not lecturer_col:
-        st.error("לא נמצאה עמודת שם מרצה.")
+        st.error("לא נמצאה עמודת שם מרצה בקובץ הזמינות.")
         return None, None
     
+    # יצירת DF חדש רק עם העמודות הרלוונטיות
     df = df.rename(columns={lecturer_col: 'Lecturer'})
-    df = df[df['Lecturer'].notna()]
     
-    # המרה לטקסט
-    df['Lecturer'] = df['Lecturer'].apply(force_to_string)
+    # המרה בטוחה של המרצה
+    df['Lecturer'] = df['Lecturer'].apply(safe_str)
+    df = df[df['Lecturer'].notna()]
     
     avail_db = {}
     sparsity = {}
@@ -161,23 +185,26 @@ def preprocess_availability(df):
 # ================= 3. SCHEDULER =================
 
 def get_waves(df, sparsity):
-    # וידוא שכל העמודות קיימות (רשת ביטחון נוספת)
-    for c in ['LinkID', 'FixDay', 'FixHour', 'Sparsity', 'Duration']:
-        if c not in df.columns:
-            if c == 'Duration': df[c] = 2
-            elif c == 'Sparsity': df[c] = 0
-            else: df[c] = None
-        
-    df['Sparsity'] = df['Lecturer'].map(sparsity).fillna(0)
+    # חישוב Sparsity בטוח
+    df['Sparsity'] = df['Lecturer'].map(sparsity).fillna(0).astype(int)
+    
+    # וידוא שכל העמודות הנדרשות קיימות ב-DF הנקי
+    # (הן אמורות להיות שם בגלל preprocess_courses, אבל ליתר ביטחון)
+    for col in ['LinkID', 'FixDay', 'FixHour', 'Duration']:
+        if col not in df.columns:
+            if col == 'Duration': df[col] = 2
+            else: df[col] = None
     
     # חלוקה לגלים
     wave_a = df[df['LinkID'].notna() & (df['FixDay'].notna() | df['FixHour'].notna())].copy()
     wave_b = df[df['LinkID'].isna() & (df['FixDay'].notna() | df['FixHour'].notna())].copy()
     wave_c = df[df['LinkID'].notna() & df['FixDay'].isna() & df['FixHour'].isna()].copy()
     
-    rem = df.drop(wave_a.index).drop(wave_b.index).drop(wave_c.index)
+    # שארית
+    processed_indices = list(wave_a.index) + list(wave_b.index) + list(wave_c.index)
+    rem = df[~df.index.isin(processed_indices)].copy()
     
-    # מיון
+    # מיון בטוח - כאן הייתה השגיאה, כעת המשתנים מובטחים להיות מסוג נכון
     wave_d = rem.sort_values(by=['Sparsity', 'Duration'], ascending=[True, False])
     
     return [wave_a, wave_b, wave_c, wave_d]
@@ -209,12 +236,14 @@ class Scheduler:
             bar.progress((idx+1)/4)
             for _, row in wave.iterrows():
                 try:
-                    lid = row['LinkID']
+                    lid = row['LinkID'] # מובטח להיות None או string
+                    
                     if lid and lid in processed_links:
                         continue
                         
                     group = [row]
                     if lid:
+                        # שימוש ב-values כדי למנוע בעיות אינדקס
                         group_df = self.courses[self.courses['LinkID'] == lid]
                         group = group_df.to_dict('records')
                         processed_links.add(lid)
@@ -222,7 +251,7 @@ class Scheduler:
                     self.attempt_schedule(row, group)
                     
                 except Exception:
-                    # דיווח על שגיאה במקום קריסה
+                    # מניעת קריסה משגיאה בשורה בודדת
                     self.errors.append({
                         'Course': row.get('Course'),
                         'Lecturer': row.get('Lecturer'),
@@ -234,12 +263,9 @@ class Scheduler:
         return pd.DataFrame(self.schedule), pd.DataFrame(self.errors)
 
     def attempt_schedule(self, main_row, group):
-        try:
-            dur = int(main_row['Duration'])
-            sem = int(main_row['Semester'])
-        except:
-            self.fail(group, "Invalid Duration/Semester")
-            return
+        # המשתנים כאן כבר בטוחים (int) בזכות הניקוי
+        dur = main_row['Duration']
+        sem = main_row['Semester']
 
         days = [int(main_row['FixDay'])] if pd.notna(main_row['FixDay']) else [1,2,3,4,5]
         hours = list(range(8, 22))
@@ -320,7 +346,7 @@ def main_process(courses_file, avail_file, iterations=20):
         avail_db, sparsity = preprocess_availability(a_raw)
         if not avail_db: return
         
-        # 2. עיבוד קורסים
+        # 2. עיבוד קורסים (Clean Room)
         courses = preprocess_courses(c_raw)
         if courses.empty:
             st.error("לא נמצאו נתונים תקינים בקובץ הקורסים (בדוק שמות עמודות).")
