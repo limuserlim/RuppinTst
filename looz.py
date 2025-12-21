@@ -257,4 +257,128 @@ class SchoolScheduler:
                 'Course': course_row['Course'],
                 'Lecturer': course_row['Lecturer'],
                 'Space': course_row['Space'],
-                'Unique
+                'UniqueKey': course_row['UniqueKey']
+            })
+            self.mark_student_busy(course_row['Year'], course_row['Semester'], day, h)
+
+    def run(self):
+        waves = get_schedule_waves(self.courses, self.avail_db)
+        processed_link_ids = set()
+        
+        progress_bar = st.progress(0)
+        total_waves = len(waves)
+
+        for wave_idx, wave_df in enumerate(waves):
+            progress_bar.progress((wave_idx + 1) / total_waves)
+            
+            for _, row in wave_df.iterrows():
+                link_id = row['LinkID']
+                if pd.notna(link_id) and link_id in processed_link_ids:
+                    continue
+                
+                group_rows = None
+                if pd.notna(link_id):
+                    group_rows = self.courses[self.courses['LinkID'] == link_id].to_dict('records')
+                    processed_link_ids.add(link_id)
+                
+                day, start_h = self.find_slot(row, linked_courses=group_rows)
+                
+                if day is not None:
+                    if group_rows:
+                        for g_row in group_rows:
+                            self.commit_schedule(g_row, day, start_h)
+                    else:
+                        self.commit_schedule(row, day, start_h)
+                else:
+                    reason = "No Slot (Constraints/Overlap)"
+                    if pd.notna(row['FixDay']): reason += " [Fixed Day]"
+                    
+                    items_to_fail = group_rows if group_rows else [row]
+                    for item in items_to_fail:
+                         self.unscheduled.append({
+                             'Course': item['Course'],
+                             'Lecturer': item['Lecturer'],
+                             'Reason': reason,
+                             'LinkID': item.get('LinkID')
+                         })
+        
+        progress_bar.empty()
+        return pd.DataFrame(self.schedule), pd.DataFrame(self.unscheduled)
+
+# ================= 4. MAIN PROCESS WRAPPER =================
+
+def main_process():
+    st.title("מערכת שיבוץ מערכת שעות - LOOZ")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        courses_file = st.file_uploader("העלה קובץ קורסים (COURSES)", type=['csv', 'xlsx'])
+    with col2:
+        avail_file = st.file_uploader("העלה קובץ זמינות (AVAILABILITY)", type=['csv', 'xlsx'])
+
+    if st.button("הרץ שיבוץ"):
+        if courses_file and avail_file:
+            st.info("קורא קבצים ומעבד נתונים...")
+            
+            # Load
+            courses_raw = load_uploaded_file(courses_file)
+            avail_raw = load_uploaded_file(avail_file)
+            
+            if courses_raw is not None and avail_raw is not None:
+                # Clean
+                courses_raw.columns = courses_raw.columns.str.strip()
+                avail_raw.columns = avail_raw.columns.str.strip()
+                
+                avail_db, sparsity, avail_cleaned_df = preprocess_availability(avail_raw)
+                courses_processed = preprocess_courses(courses_raw)
+                
+                # בדיקת שפיות - הצגה במסך
+                st.subheader("Sanity Check - דגימה מקובץ הזמינות")
+                try:
+                    sample = avail_raw.sample(n=min(3, len(avail_raw)))
+                    for _, row in sample.iterrows():
+                        lect = row.get('Lecturer', row.get('שם מרצה', 'Unknown'))
+                        st.text(f"מרצה: {lect}")
+                except:
+                    st.write("לא ניתן להציג דגימה כרגע")
+
+                # Validation
+                if avail_db and check_unique_integrity(courses_processed):
+                    courses_ready = check_strict_intersection(courses_processed, avail_db)
+                    
+                    # Run Scheduler
+                    st.info("מתחיל אלגוריתם שיבוץ...")
+                    scheduler = SchoolScheduler(courses_ready, avail_db)
+                    final_schedule, unscheduled_report = scheduler.run()
+                    
+                    st.success(f"השיבוץ הסתיים! שובצו: {len(final_schedule)} שיעורים. לא שובצו: {len(unscheduled_report)}")
+                    
+                    # Display Results
+                    st.subheader("תוצאות השיבוץ (תצוגה חלקית)")
+                    st.dataframe(final_schedule.head())
+                    
+                    # Download Buttons
+                    if not final_schedule.empty:
+                        csv_sched = final_schedule.to_csv(index=False).encode('utf-8-sig')
+                        st.download_button(
+                            label="הורד קובץ מערכת סופי (CSV)",
+                            data=csv_sched,
+                            file_name="Final_Schedule.csv",
+                            mime="text/csv",
+                        )
+                    
+                    if not unscheduled_report.empty:
+                        st.error("ישנם קורסים שלא שובצו - הורד דוח שגיאות")
+                        csv_err = unscheduled_report.to_csv(index=False).encode('utf-8-sig')
+                        st.download_button(
+                            label="הורד דוח שגיאות (CSV)",
+                            data=csv_err,
+                            file_name="Unscheduled_Report.csv",
+                            mime="text/csv",
+                        )
+        else:
+            st.error("אנא העלה את שני הקבצים כדי להמשיך.")
+
+# אפשרות להרצה עצמאית לבדיקה
+if __name__ == "__main__":
+    main_process()
