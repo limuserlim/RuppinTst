@@ -43,7 +43,6 @@ def load_uploaded_file(uploaded_file):
     if uploaded_file is None:
         return None
     
-    # מנסה לקרוא כ-Excel או CSV
     try:
         # בדיקה אם זהו אובייקט Streamlit UploadedFile
         filename = getattr(uploaded_file, 'name', 'unknown.xlsx')
@@ -205,4 +204,29 @@ class SchoolScheduler:
                 return True
         return False
 
-    def
+    def find_slot(self, course_row, linked_courses=None):
+        lecturer = course_row['Lecturer']
+        duration = int(course_row['Duration'])
+        semester = int(course_row['Semester'])
+        year = course_row['Year']
+        space = course_row['Space']
+        fix_day = course_row['FixDay']
+        fix_hour = course_row['FixHour']
+        
+        days_to_check = [1, 2, 3, 4, 5]
+        if pd.notna(fix_day):
+            days_to_check = [int(fix_day)]
+            
+        hours_search = list(self.hours_range)
+        if str(space).lower() == 'zoom':
+            hours_search = sorted(hours_search, reverse=True)
+            
+        if pd.notna(fix_hour):
+            hours_search = [int(fix_hour)]
+
+        for day in days_to_check:
+            for start_h in hours_search:
+                if start_h + duration > 22: continue
+
+                valid_slot = True
+                group_to_check = [course_row] if linked_courses is None else linked_courses
