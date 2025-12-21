@@ -223,12 +223,44 @@ class Scheduler:
 # ================= 4. CHAT FUNCTIONS =================
 
 def init_chat_session(schedule_df, errors_df, api_key):
-    """מאתחל שיחה עם ג'מיני בהתבסס על תוצאות השיבוץ"""
+    """מאתחל שיחה עם ג'מיני ובוחר מודל זמין אוטומטית"""
     if not HAS_GENAI or not api_key: return None
     
     genai.configure(api_key=api_key)
     generation_config = genai.types.GenerationConfig(temperature=0.0)
     
+    # === תיקון: בחירת מודל דינמית ===
+    # אנחנו נותנים למערכת רשימת מודלים מועדפים ונבדוק מי זמין עבורך
+    model_name = None
+    preferred_models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro", "gemini-1.0-pro"]
+    
+    try:
+        # בקשה מגוגל: תן לי את רשימת המודלים הזמינים למפתח הזה
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # חיפוש ההתאמה הטובה ביותר
+        for preferred in preferred_models:
+            # בודקים אם המודל המועדף קיים ברשימה (עם או בלי הקידומת models/)
+            for available in available_models:
+                if preferred in available:
+                    model_name = available
+                    break
+            if model_name: break
+            
+        # אם לא מצאנו כלום מהמועדפים, ניקח את הראשון שזמין
+        if not model_name and available_models:
+            model_name = available_models[0]
+            
+    except Exception as e:
+        # במקרה של כישלון בחיפוש, ננסה ברירת מחדל ישנה
+        print(f"Error listing models: {e}")
+        model_name = "models/gemini-pro"
+
+    if not model_name:
+        st.error("❌ לא נמצאו מודלים זמינים של Gemini בחשבון זה.")
+        return None
+
+    # הכנת הנתונים לפרומפט
     csv_sched = schedule_df.to_csv(index=False)
     csv_errors = errors_df.to_csv(index=False)
     
@@ -241,11 +273,13 @@ def init_chat_session(schedule_df, errors_df, api_key):
     {csv_errors}
     Answer ONLY based on this data. Use Hebrew.
     """
+    
     try:
-        model = genai.GenerativeModel("gemini-pro", generation_config=generation_config)
+        model = genai.GenerativeModel(model_name, generation_config=generation_config)
         return model.start_chat(history=[{"role": "user", "parts": prompt}, {"role": "model", "parts": "אני כאן."}])
-    except: return None
-
+    except Exception as e:
+        st.error(f"שגיאה בהפעלת המודל ({model_name}): {e}")
+        return None
 # ================= 5. MAIN =================
 
 def main_process(courses_file, avail_file, iterations=30):
@@ -366,4 +400,5 @@ def main_process(courses_file, avail_file, iterations=30):
 
 if __name__ == "__main__":
     pass
+
 
