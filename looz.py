@@ -7,13 +7,10 @@ import traceback
 # ================= 1. UTILS =================
 
 def force_to_string(val):
-    """
-    ממיר כל ערך לטקסט באופן שלא משאיר סיכוי לאובייקטים מורכבים לשרוד
-    """
+    """המרה אגרסיבית לטקסט למניעת שגיאות אובייקטים"""
     if val is None or pd.isna(val):
         return None
     try:
-        # המרה ישירה ל-string מנטרלת מילונים, רשימות וכל אובייקט אחר
         return str(val).strip()
     except:
         return ""
@@ -36,13 +33,12 @@ def load_uploaded_file(uploaded_file):
 
 def parse_availability(row, cols):
     """פונקציה מוגנת לפיענוח זמינות"""
-    slots = set()
     for col in cols:
         val = row[col]
         if pd.isna(val): continue
         
-        # זיהוי יום וסמסטר מהכותרת (למשל 12 -> יום 1 סמסטר 2)
         s_col = str(col).strip()
+        # הנחה: שם העמודה הוא XY (למשל 12)
         if len(s_col) < 2 or not s_col[:2].isdigit(): continue
         
         try:
@@ -50,7 +46,6 @@ def parse_availability(row, cols):
             semester = int(s_col[1])
             if not (1 <= day <= 7): continue
             
-            # פירוק המחרוזת "8-10, 12-14"
             parts = str(val).replace(';', ',').split(',')
             for p in parts:
                 p = p.strip()
@@ -69,17 +64,27 @@ def preprocess_courses(df):
     df = df.dropna(how='all')
     df.columns = df.columns.str.strip()
     
-    # מיפוי עמודות
+    # מיפוי עמודות חכם ומורחב
     col_map = {}
     for col in df.columns:
         c = str(col).lower().strip()
-        if 'קורס' in c or 'course' in c: col_map[col] = 'Course'
+        
+        # זיהוי משך קורס (כולל שעות, ש"ס)
+        if 'משך' in c or 'duration' in c or 'ש"ס' in c: 
+            col_map[col] = 'Duration'
+        # זיהוי שעות ספציפיות אם המילה "שעות" מופיעה לבד (בזהירות)
+        elif c == 'שעות' or c == 'hours':
+            col_map[col] = 'Duration'
+            
+        elif 'קורס' in c or 'course' in c: col_map[col] = 'Course'
         elif 'מרצה' in c or 'lecturer' in c: col_map[col] = 'Lecturer'
         elif 'סמסטר' in c or 'semester' in c: col_map[col] = 'Semester'
-        elif 'משך' in c or 'duration' in c: col_map[col] = 'Duration'
         elif 'מרחב' in c or 'space' in c: col_map[col] = 'Space'
+        
+        # זיהוי אילוצים קשיחים
         elif 'יום' in c or 'day' in c: col_map[col] = 'FixDay'
-        elif 'שעה' in c or 'hour' in c: col_map[col] = 'FixHour'
+        elif 'התחלה' in c or 'start' in c or ('שעה' in c and 'שעות' not in c): col_map[col] = 'FixHour'
+        
         elif 'שנה' in c or 'year' in c: col_map[col] = 'Year'
         elif 'קישור' in c or 'link' in c: col_map[col] = 'LinkID'
             
@@ -91,21 +96,30 @@ def preprocess_courses(df):
 
     df = df[df['Course'].notna() & df['Lecturer'].notna()]
     
-    # === התיקון הגרעיני: המרה לטקסט ללא תנאים ===
-    # זה מונע את השגיאה ב-100% כי str תמיד hashable
+    # === מילוי ברירות מחדל קריטיות למניעת קריסה ===
+    
+    # 1. משך: אם לא זוהה, נניח שעתיים
+    if 'Duration' not in df.columns:
+        df['Duration'] = 2 
+    else:
+        df['Duration'] = pd.to_numeric(df['Duration'], errors='coerce').fillna(2).astype(int)
+
+    # 2. שדות טקסט: המרה בטוחה
     for col in ['Course', 'Lecturer', 'LinkID', 'Space', 'Year']:
         if col not in df.columns:
             df[col] = None
-        # אנו דורסים את העמודה עם גרסת הטקסט שלה
         df[col] = df[col].apply(force_to_string)
 
-    # המרות מספריות
-    for col in ['Duration', 'Semester']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+    # 3. שדות מספריים: המרה בטוחה
+    if 'Semester' not in df.columns:
+        df['Semester'] = 1
+    else:
+        df['Semester'] = pd.to_numeric(df['Semester'], errors='coerce').fillna(1).astype(int)
             
     for col in ['FixDay', 'FixHour']:
-        if col in df.columns:
+        if col not in df.columns:
+            df[col] = None
+        else:
             df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
             
     return df
@@ -132,7 +146,6 @@ def preprocess_availability(df):
     # המרה לטקסט בטוח
     df['Lecturer'] = df['Lecturer'].apply(force_to_string)
     
-    # בניית מילון זמינות
     avail_db = {}
     sparsity = {}
     
@@ -160,18 +173,23 @@ def preprocess_availability(df):
 # ================= 3. SCHEDULER =================
 
 def get_waves(df, sparsity):
-    # וידוא שכל העמודות קיימות
-    for c in ['LinkID', 'FixDay', 'FixHour', 'Sparsity']:
-        if c not in df.columns: df[c] = None
+    # וידוא סופי שהעמודות קיימות לפני המיון (למניעת KeyError)
+    for c in ['LinkID', 'FixDay', 'FixHour', 'Sparsity', 'Duration']:
+        if c not in df.columns:
+            if c == 'Duration': df[c] = 2
+            elif c == 'Sparsity': df[c] = 0
+            else: df[c] = None
         
     df['Sparsity'] = df['Lecturer'].map(sparsity).fillna(0)
     
-    # פיצול
+    # חלוקה לגלים
     wave_a = df[df['LinkID'].notna() & (df['FixDay'].notna() | df['FixHour'].notna())].copy()
     wave_b = df[df['LinkID'].isna() & (df['FixDay'].notna() | df['FixHour'].notna())].copy()
     wave_c = df[df['LinkID'].notna() & df['FixDay'].isna() & df['FixHour'].isna()].copy()
     
     rem = df.drop(wave_a.index).drop(wave_b.index).drop(wave_c.index)
+    
+    # המיון שגרם לשגיאה - כעת מוגן כי Duration בטוח קיים
     wave_d = rem.sort_values(by=['Sparsity', 'Duration'], ascending=[True, False])
     
     return [wave_a, wave_b, wave_c, wave_d]
@@ -182,7 +200,7 @@ class Scheduler:
         self.avail_db = avail_db
         self.schedule = []
         self.errors = []
-        self.busy = {} # student busy
+        self.busy = {} 
         
     def is_student_busy(self, year, sem, day, h):
         return self.busy.get(year, {}).get(sem, {}).get(day, {}).get(h, False)
@@ -194,6 +212,7 @@ class Scheduler:
         self.busy[year][sem][day][h] = True
 
     def run(self):
+        # קריאה לפונקציה המוגנת
         waves = get_waves(self.courses, self.avail_db)
         processed_links = set()
         
@@ -203,168 +222,4 @@ class Scheduler:
             bar.progress((idx+1)/4)
             for _, row in wave.iterrows():
                 try:
-                    # שימוש ב-LinkID שטופל מראש להיות string או None
-                    lid = row['LinkID']
-                    
-                    if lid and lid in processed_links:
-                        continue
-                        
-                    group = [row]
-                    if lid:
-                        # חיפוש קבוצה בטוח
-                        group_df = self.courses[self.courses['LinkID'] == lid]
-                        group = group_df.to_dict('records')
-                        processed_links.add(lid)
-                    
-                    # ניסיון שיבוץ
-                    self.attempt_schedule(row, group)
-                    
-                except Exception:
-                    # במקרה שגיאה נדיר, נרשום בלוג ולא נקריס
-                    self.errors.append({
-                        'Course': row.get('Course'),
-                        'Lecturer': row.get('Lecturer'),
-                        'Reason': "Unexpected Error",
-                        'Debug': traceback.format_exc()
-                    })
-        
-        bar.empty()
-        return pd.DataFrame(self.schedule), pd.DataFrame(self.errors)
-
-    def attempt_schedule(self, main_row, group):
-        # חילוץ נתונים
-        try:
-            dur = int(main_row['Duration'])
-            sem = int(main_row['Semester'])
-        except:
-            self.fail(group, "Invalid Data")
-            return
-
-        # אילוצים
-        days = [int(main_row['FixDay'])] if pd.notna(main_row['FixDay']) else [1,2,3,4,5]
-        hours = list(range(8, 22))
-        if str(main_row.get('Space')).lower() == 'zoom': hours.reverse()
-        if pd.notna(main_row['FixHour']): hours = [int(main_row['FixHour'])]
-
-        for day in days:
-            for start_h in hours:
-                if start_h + dur > 22: continue
-                
-                if self.check_valid(group, sem, day, start_h, dur):
-                    self.commit(group, sem, day, start_h, dur)
-                    return
-                    
-        # אם הגענו לפה - נכשל
-        reason = "No Slot"
-        if pd.notna(main_row['FixDay']): reason += " (Day Fixed)"
-        self.fail(group, reason)
-
-    def check_valid(self, group, sem, day, start_h, dur):
-        for item in group:
-            lec = item['Lecturer']
-            year = item['Year']
-            
-            for h in range(start_h, start_h + dur):
-                # 1. מרצה זמין?
-                if lec not in self.avail_db or sem not in self.avail_db[lec] or \
-                   day not in self.avail_db[lec][sem] or h not in self.avail_db[lec][sem][day]:
-                    return False
-                
-                # 2. מרצה תפוס?
-                for s in self.schedule:
-                    if s['Lecturer'] == lec and s['Day'] == day and s['Hour'] == h and s['Semester'] == sem:
-                        return False
-                
-                # 3. סטודנט תפוס?
-                if year and self.is_student_busy(year, sem, day, h):
-                    return False
-        return True
-
-    def commit(self, group, sem, day, start_h, dur):
-        for item in group:
-            for h in range(start_h, start_h + dur):
-                self.schedule.append({
-                    'Year': item.get('Year'),
-                    'Semester': sem,
-                    'Day': day,
-                    'Hour': h,
-                    'Course': item.get('Course'),
-                    'Lecturer': item.get('Lecturer'),
-                    'Space': item.get('Space'),
-                    'LinkID': item.get('LinkID')
-                })
-                if item.get('Year'):
-                    self.set_student_busy(item['Year'], sem, day, h)
-
-    def fail(self, group, reason):
-        for item in group:
-            self.errors.append({
-                'Course': item.get('Course'),
-                'Lecturer': item.get('Lecturer'),
-                'Reason': reason,
-                'LinkID': item.get('LinkID')
-            })
-
-# ================= 4. MAIN =================
-
-def main_process(courses_file, avail_file, iterations=20):
-    if not courses_file or not avail_file: return
-    
-    st.write("---")
-    st.info("🔄 טוען נתונים...")
-    
-    try:
-        c_raw = load_uploaded_file(courses_file)
-        a_raw = load_uploaded_file(avail_file)
-        
-        if c_raw is None or a_raw is None: return
-        
-        # 1. עיבוד זמינות
-        avail_db, sparsity = preprocess_availability(a_raw)
-        if not avail_db: return
-        
-        # 2. עיבוד קורסים (כולל ההמרה הבטוחה)
-        courses = preprocess_courses(c_raw)
-        if courses.empty:
-            st.error("קובץ הקורסים ריק או לא תקין.")
-            return
-
-        # 3. בדיקת חיתוך מרצים (בטוחה, כי הכל סטרינגים)
-        valid_lecs = set(avail_db.keys())
-        mask = courses['Lecturer'].isin(valid_lecs)
-        removed = len(courses) - mask.sum()
-        if removed > 0:
-            st.warning(f"הוסרו {removed} קורסים (מרצה לא נמצא בקובץ זמינות).")
-            
-        final_courses = courses[mask].copy()
-        
-        if final_courses.empty:
-            st.error("אין קורסים לשיבוץ.")
-            return
-            
-        # 4. הרצה
-        st.success("✅ נתונים תקינים. מתחיל שיבוץ...")
-        sched = Scheduler(final_courses, avail_db)
-        df_res, df_err = sched.run()
-        
-        # 5. תוצאות
-        st.markdown("### 📊 תוצאות")
-        c1, c2 = st.columns(2)
-        c1.metric("שובצו", len(df_res))
-        c2.metric("לא שובצו", len(df_err), delta_color="inverse")
-        
-        if not df_res.empty:
-            st.dataframe(df_res)
-            st.download_button("📥 הורד מערכת", df_res.to_csv(index=False).encode('utf-8-sig'), "schedule.csv")
-            
-        if not df_err.empty:
-            st.error("פירוט שגיאות:")
-            st.dataframe(df_err)
-            st.download_button("⚠️ הורד שגיאות", df_err.to_csv(index=False).encode('utf-8-sig'), "errors.csv")
-            
-    except Exception:
-        st.error("שגיאה כללית במערכת:")
-        st.code(traceback.format_exc())
-
-if __name__ == "__main__":
-    st.warning("Run via menu.py")
+                    lid = row
