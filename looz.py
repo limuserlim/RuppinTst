@@ -228,7 +228,8 @@ def main_process(*args):
     # אם עדיין אין תוצאות, הצג את מסך ההעלאה וההגדרות
     if st.session_state.results is None:
         st.sidebar.header("הגדרות הרצה")
-        iterations = st.sidebar.slider("מספר איטרציות לאופטימיזציה", 1, 30, 10, help="המחשב יבצע את השיבוץ מספר פעמים ויבחר את הטוב ביותר.")
+        # --- השינוי שביקשת כאן: טווח 1 עד 100, ברירת מחדל 30 ---
+        iterations = st.sidebar.slider("מספר איטרציות לאופטימיזציה", 1, 100, 30, help="המחשב יבצע את השיבוץ מספר פעמים ויבחר את הטוב ביותר.")
         
         st.markdown("### העלאת נתונים")
         col1, col2 = st.columns(2)
