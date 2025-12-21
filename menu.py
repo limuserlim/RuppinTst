@@ -2,6 +2,30 @@ import importlib
 import streamlit as st
 import sys
 
+
+#***********************************************************DEBUG************************************
+import streamlit as st
+import sys
+import importlib
+
+# --- דיבאג: ניסיון ייבוא עם הצגת שגיאה ---
+try:
+    import looz
+except Exception as e:
+    st.error(f"🔍 שגיאה בטעינת הקובץ looz.py: {e}")
+    looz = None
+
+try:
+    import quest
+except ImportError:
+    quest = None
+
+try:
+    import update_headers
+except ImportError:
+    update_headers = None
+#***********************************************************
+
 # נסיון לייבא את המודולים (כדי למנוע קריסה אם קובץ חסר)
 try:
     import looz
@@ -119,3 +143,4 @@ elif action == "עדכן שמות שדות קובץ תשובות":
 # --- מקרה ברירת מחדל ---
 elif action is None:
     st.info("⬆️ אנא בחר אחת מהאפשרויות למעלה כדי להתחיל לעבוד.")
+
