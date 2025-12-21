@@ -4,7 +4,7 @@ import numpy as np
 import io
 import traceback
 
-# --- תוספת: ייבוא ספריית ג'מיני בצורה בטוחה ---
+# --- בדיקת ספריית ג'מיני ---
 try:
     import google.generativeai as genai
     HAS_GENAI = True
@@ -23,16 +23,12 @@ def safe_str(val):
     except: return ""
 
 def clean_semester(val):
-    """המרה חכמה של סמסטר (ב -> 2, א -> 1)"""
     s = str(val).strip().replace("'", "").replace('"', "")
     if s in ['א', 'A', 'a', '1']: return 1
     if s in ['ב', 'B', 'b', '2']: return 2
     if s in ['ג', 'C', 'c', '3']: return 3
-    # ניסיון המרה למספר רגיל
-    try:
-        return int(float(s))
-    except:
-        return 1 # ברירת מחדל
+    try: return int(float(s))
+    except: return 1
 
 def load_uploaded_file(uploaded_file):
     if uploaded_file is None: return None
@@ -47,25 +43,15 @@ def load_uploaded_file(uploaded_file):
         return None
 
 def parse_availability(row, cols):
-    """
-    מפענח עמודות זמן כמו '12', '22'.
-    הנחה: ספרה ראשונה = יום, ספרה שנייה = סמסטר.
-    """
     for col in cols:
         val = row[col]
         if pd.isna(val): continue
-        
         s_col = str(col).strip()
-        # וידוא שזה פורמט תקין (למשל 12)
         if len(s_col) < 2 or not s_col[:2].isdigit(): continue
-        
         try:
-            day = int(s_col[0])      # הספרה הראשונה
-            semester = int(s_col[1]) # הספרה השנייה
-            
+            day = int(s_col[0])
+            semester = int(s_col[1])
             if not (1 <= day <= 7): continue
-            
-            # פירוק השעות (למשל "8-9, 9-10")
             parts = str(val).replace(';', ',').split(',')
             for p in parts:
                 p = p.strip()
@@ -75,19 +61,16 @@ def parse_availability(row, cols):
                     end = int(float(p_split[1]))
                     for h in range(start, end):
                         yield (semester, day, h)
-        except:
-            continue
+        except: continue
 
 # ================= 2. PRE-PROCESSING =================
 
 def preprocess_courses(df):
     df = df.dropna(how='all')
     df.columns = df.columns.str.strip()
-    
-    # מיפוי מדויק לפי מה ששלחת
     col_map = {}
     for col in df.columns:
-        c = str(col).strip() # רגישות לאותיות ולרווחים
+        c = str(col).strip()
         if c == 'מרצה': col_map[col] = 'Lecturer'
         elif c == 'שם קורס': col_map[col] = 'Course'
         elif c == 'שעות': col_map[col] = 'Duration'
@@ -97,89 +80,49 @@ def preprocess_courses(df):
         elif c == 'אילוץ שעה': col_map[col] = 'FixHour'
         elif c == 'מרחב': col_map[col] = 'Space'
         elif c == 'שנה': col_map[col] = 'Year'
-            
     df = df.rename(columns=col_map)
-    
-    if 'Course' not in df.columns or 'Lecturer' not in df.columns:
-        return pd.DataFrame()
-
+    if 'Course' not in df.columns or 'Lecturer' not in df.columns: return pd.DataFrame()
     df = df[df['Course'].notna() & df['Lecturer'].notna()]
-    
-    # המרות
     for col in ['Course', 'Lecturer', 'Space', 'LinkID', 'Year']:
         if col not in df.columns: df[col] = None
         df[col] = df[col].apply(safe_str)
-
-    # תיקון קריטי: המרת סמסטר עברי למספר
-    if 'Semester' in df.columns:
-        df['Semester'] = df['Semester'].apply(clean_semester)
-    else:
-        df['Semester'] = 1
-        
-    if 'Duration' in df.columns:
-        df['Duration'] = pd.to_numeric(df['Duration'], errors='coerce').fillna(2).astype(int)
-    else:
-        df['Duration'] = 2
-
+    if 'Semester' in df.columns: df['Semester'] = df['Semester'].apply(clean_semester)
+    else: df['Semester'] = 1
+    if 'Duration' in df.columns: df['Duration'] = pd.to_numeric(df['Duration'], errors='coerce').fillna(2).astype(int)
+    else: df['Duration'] = 2
     for col in ['FixDay', 'FixHour']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
-        else:
-            df[col] = None
-            
+        if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+        else: df[col] = None
     return df
 
 def preprocess_availability(df):
     df = df.dropna(how='all')
     df.columns = df.columns.str.strip()
-    
     lecturer_col = None
-    # זיהוי מדויק לפי "שם מלא"
     for col in df.columns:
-        if str(col).strip() == "שם מלא":
-            lecturer_col = col
-            break
-            
-    # Fallback
+        if str(col).strip() == "שם מלא": lecturer_col = col; break
     if not lecturer_col:
         for col in df.columns:
-            if "שם" in str(col) or "מרצה" in str(col):
-                lecturer_col = col
-                break
-    
-    if not lecturer_col:
-        st.error("לא נמצאה עמודת 'שם מלא' בקובץ הזמינות.")
-        return None, None
-    
+            if "שם" in str(col) or "מרצה" in str(col): lecturer_col = col; break
+    if not lecturer_col: st.error("לא נמצאה עמודת 'שם מלא' בקובץ הזמינות."); return None, None
     df = df.rename(columns={lecturer_col: 'Lecturer'})
     df['Lecturer'] = df['Lecturer'].apply(safe_str)
     df = df[df['Lecturer'].notna()]
-    
     avail_db = {}
     sparsity = {}
-    
-    # זיהוי עמודות זמן (מספרים כמו 12, 22)
     avail_cols = [c for c in df.columns if str(c).isdigit()]
-    
     for _, row in df.iterrows():
         lec = row['Lecturer']
         if not lec: continue
-        
-        # נרמול שם מרצה (הסרת רווחים כפולים)
         lec = " ".join(lec.split())
-        
-        if lec not in avail_db:
-            avail_db[lec] = {}
-            
+        if lec not in avail_db: avail_db[lec] = {}
         count = 0
         for sem, day, h in parse_availability(row, avail_cols):
             if sem not in avail_db[lec]: avail_db[lec][sem] = {}
             if day not in avail_db[lec][sem]: avail_db[lec][sem][day] = set()
             avail_db[lec][sem][day].add(h)
             count += 1
-            
         sparsity[lec] = count
-        
     return avail_db, sparsity
 
 # ================= 3. SCHEDULER ENGINE =================
@@ -205,68 +148,47 @@ class Scheduler:
         self.busy[year][sem][day][h] = True
 
     def run(self, shuffle=False):
-        # הכנת נתונים
-        # נרמול שמות המרצים בקורסים כדי שיתאימו ל-DB
         self.courses['Lecturer'] = self.courses['Lecturer'].apply(lambda x: " ".join(str(x).split()))
-        
         df = self.courses.copy()
-        # מילוי 0 אם המרצה לא קיים ב-sparsity
         df['Sparsity'] = df['Lecturer'].map(self.sparsity).fillna(0).astype(int)
-        
         wave_hard = df[df['LinkID'].notna() | df['FixDay'].notna() | df['FixHour'].notna()]
         wave_soft = df[~df.index.isin(wave_hard.index)]
-        
-        if shuffle:
-            wave_soft = wave_soft.sample(frac=1).reset_index(drop=True)
-        else:
-            wave_soft = wave_soft.sort_values(by=['Sparsity', 'Duration'], ascending=[True, False])
-            
+        if shuffle: wave_soft = wave_soft.sample(frac=1).reset_index(drop=True)
+        else: wave_soft = wave_soft.sort_values(by=['Sparsity', 'Duration'], ascending=[True, False])
         waves = [wave_hard, wave_soft]
-        
         self.schedule = []
         self.errors = []
         self.busy = {}
         self.processed_links = set()
-        
         for wave in waves:
             for _, row in wave.iterrows():
                 try:
                     lid = row['LinkID']
                     if lid and lid in self.processed_links: continue
-                    
                     group = [row]
                     if lid:
                         group_df = self.courses[self.courses['LinkID'] == lid]
                         group = group_df.to_dict('records')
                         self.processed_links.add(lid)
-                    
                     self.attempt_schedule(row, group)
                 except: continue
-                
         return pd.DataFrame(self.schedule), pd.DataFrame(self.errors)
 
     def attempt_schedule(self, main_row, group):
         try:
             dur = int(main_row['Duration'])
             sem = int(main_row['Semester'])
-        except:
-            self.fail(group, "נתונים שגויים")
-            return
-
+        except: self.fail(group, "נתונים שגויים"); return
         days = [int(main_row['FixDay'])] if pd.notna(main_row['FixDay']) else [1,2,3,4,5]
         hours = list(range(8, 22))
-        
         if str(main_row.get('Space')).lower() == 'zoom': hours.reverse()
         if pd.notna(main_row['FixHour']): hours = [int(main_row['FixHour'])]
-
         for day in days:
             for start_h in hours:
                 if start_h + dur > 22: continue
                 if self.check_valid(group, sem, day, start_h, dur):
-                    self.commit(group, sem, day, start_h, dur)
-                    return
-        
-        reason = "לא נמצא חלון זמן (או התנגשות)"
+                    self.commit(group, sem, day, start_h, dur); return
+        reason = "לא נמצא חלון זמן"
         if pd.notna(main_row['FixDay']): reason += " [אילוץ יום]"
         self.fail(group, reason)
 
@@ -274,112 +196,85 @@ class Scheduler:
         for item in group:
             lec = item['Lecturer']
             year = item.get('Year')
-            
             for h in range(start_h, start_h + dur):
-                # 1. זמינות
                 if lec not in self.avail_db: return False
-                # Fallback: אם אין נתונים לסמסטר הספציפי, נניח שהמרצה לא זמין
                 if sem not in self.avail_db[lec]: return False
-                
                 if day not in self.avail_db[lec][sem]: return False
                 if h not in self.avail_db[lec][sem][day]: return False
-                
-                # 2. התנגשות מערכת
                 for s in self.schedule:
-                    if s['Lecturer'] == lec and s['Day'] == day and s['Hour'] == h and s['Semester'] == sem:
-                        return False
-                
-                # 3. סטודנטים
-                if year and self.is_student_busy(year, sem, day, h):
-                    return False
+                    if s['Lecturer'] == lec and s['Day'] == day and s['Hour'] == h and s['Semester'] == sem: return False
+                if year and self.is_student_busy(year, sem, day, h): return False
         return True
 
     def commit(self, group, sem, day, start_h, dur):
         for item in group:
             for h in range(start_h, start_h + dur):
                 self.schedule.append({
-                    'Year': item.get('Year'),
-                    'Semester': sem,
-                    'Day': day,
-                    'Hour': h,
-                    'Course': item.get('Course'),
-                    'Lecturer': item.get('Lecturer'),
-                    'Space': item.get('Space'),
-                    'LinkID': item.get('LinkID')
+                    'Year': item.get('Year'), 'Semester': sem, 'Day': day, 'Hour': h,
+                    'Course': item.get('Course'), 'Lecturer': item.get('Lecturer'),
+                    'Space': item.get('Space'), 'LinkID': item.get('LinkID')
                 })
-                if item.get('Year'):
-                    self.set_student_busy(item['Year'], sem, day, h)
+                if item.get('Year'): self.set_student_busy(item['Year'], sem, day, h)
 
     def fail(self, group, reason):
         for item in group:
-            self.errors.append({
-                'Course': item.get('Course'),
-                'Lecturer': item.get('Lecturer'),
-                'Reason': reason,
-                'LinkID': item.get('LinkID')
-            })
+            self.errors.append({'Course': item.get('Course'), 'Lecturer': item.get('Lecturer'), 'Reason': reason, 'LinkID': item.get('LinkID')})
 
-# ================= 4. CHAT FUNCTIONS (NEW) =================
+# ================= 4. CHAT FUNCTIONS =================
 
 def init_chat_session(schedule_df, errors_df, api_key):
     """מאתחל שיחה עם ג'מיני בהתבסס על תוצאות השיבוץ"""
     if not HAS_GENAI or not api_key: return None
     
     genai.configure(api_key=api_key)
-    # temperature=0.0 מבטיח תשובות מדויקות ולא יצירתיות
     generation_config = genai.types.GenerationConfig(temperature=0.0)
     
-    # המרת הנתונים ל-CSV כדי שהמודל יבין
     csv_sched = schedule_df.to_csv(index=False)
     csv_errors = errors_df.to_csv(index=False)
     
     prompt = f"""
     You are a data analyst for a university scheduling system.
-    Here is the data of the generated schedule:
-    
-    SUCCESSFUL SCHEDULE (CSV):
+    Data:
+    SUCCESSFUL SCHEDULE:
     {csv_sched}
-    
-    FAILED/UNSCHEDULED COURSES (CSV):
+    FAILED COURSES:
     {csv_errors}
-    
-    Please answer questions based ONLY on this data.
-    If asked about a specific lecturer or course, look it up in the data.
-    Answer concisely and in Hebrew.
+    Answer ONLY based on this data. Use Hebrew.
     """
-    
     try:
         model = genai.GenerativeModel("gemini-1.5-flash", generation_config=generation_config)
-        chat = model.start_chat(history=[
-            {"role": "user", "parts": prompt},
-            {"role": "model", "parts": "הבנתי. אני אנליסט הנתונים שלך. שאל אותי שאלות על השיבוץ."}
-        ])
-        return chat
-    except Exception as e:
-        return None
+        return model.start_chat(history=[{"role": "user", "parts": prompt}, {"role": "model", "parts": "אני כאן."}])
+    except: return None
 
 # ================= 5. MAIN =================
 
 def main_process(courses_file, avail_file, iterations=30):
     if not courses_file or not avail_file: return
     
-    # --- Sidebar API Key ---
+    # --- קבלת API KEY מה-Secrets או מהמשתמש ---
+    api_key = None
+    if "GOOGLE_API_KEY" in st.secrets:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+    
+    # אזור צדדי - להציג סטטוס או לבקש מפתח אם חסר
     with st.sidebar:
         st.header("🤖 הגדרות צ'אט")
-        api_key = st.text_input("Google API Key", type="password")
+        
         if not HAS_GENAI:
-            st.warning("⚠️ ספריית Gemini חסרה. הצ'אט לא יעבוד.")
-    
+            st.error("⚠️ ספריית Gemini חסרה (google-generativeai).")
+        elif api_key:
+            st.success("✅ מפתח API נטען מה-Secrets")
+        else:
+            api_key = st.text_input("Google API Key", type="password", help="נדרש רק אם לא מוגדר ב-Secrets")
+
     st.write("---")
     st.info("🔄 טוען נתונים...")
     
     try:
-        # 1. טעינה
         c_raw = load_uploaded_file(courses_file)
         a_raw = load_uploaded_file(avail_file)
         if c_raw is None or a_raw is None: return
         
-        # 2. עיבוד
         avail_db, sparsity = preprocess_availability(a_raw)
         if not avail_db: return
         
@@ -388,10 +283,7 @@ def main_process(courses_file, avail_file, iterations=30):
             st.error("קובץ הקורסים לא תקין.")
             return
 
-        # 3. התאמה
-        # נרמול שמות בקורסים לצורך בדיקה
         courses['Lecturer'] = courses['Lecturer'].apply(lambda x: " ".join(str(x).split()))
-        
         valid_lecs = set(avail_db.keys())
         mask = courses['Lecturer'].isin(valid_lecs)
         
@@ -404,32 +296,25 @@ def main_process(courses_file, avail_file, iterations=30):
             st.error("אין קורסים לשיבוץ (0 התאמות). בדוק שהשמות זהים בשני הקבצים.")
             return
 
-        # 4. הרצה
         st.success(f"✅ מתחיל שיבוץ ({iterations} איטרציות)...")
-        
-        best_sched = pd.DataFrame()
-        best_errors = pd.DataFrame()
-        min_errors = float('inf')
-        
+        best_sched = pd.DataFrame(); best_errors = pd.DataFrame(); min_errors = float('inf')
         bar = st.progress(0)
         
         for i in range(iterations + 1):
-            bar.progress(i / (iterations + 1))
+            bar.progress(i/(iterations+1))
             sched = Scheduler(final_courses, avail_db, sparsity)
             s, e = sched.run(shuffle=(i > 0))
             
             if len(e) < min_errors:
-                min_errors = len(e)
-                best_sched = s
-                best_errors = e
+                min_errors = len(e); best_sched = s; best_errors = e
                 if min_errors == 0: break
         
         bar.empty()
         
-        # 5. תוצאות
         st.divider()
         c1, c2 = st.columns(2)
-        c1.metric("✅ שובצו", len(best_sched))
+        unique_sched = len(best_sched.drop_duplicates(subset=['Course', 'Lecturer'])) if not best_sched.empty else 0
+        c1.metric("✅ קורסים שובצו", unique_sched)
         c2.metric("❌ לא שובצו", len(best_errors), delta_color="inverse")
         
         if not best_sched.empty:
@@ -441,44 +326,39 @@ def main_process(courses_file, avail_file, iterations=30):
             st.dataframe(best_errors)
             st.download_button("⚠️ הורד שגיאות", best_errors.to_csv(index=False).encode('utf-8-sig'), "errors.csv")
 
-        # --- CHAT INTERFACE ---
-        if api_key and HAS_GENAI:
-            st.divider()
-            st.subheader("💬 שוחח עם הנתונים (AI Analyst)")
-            
-            # אתחול צ'אט אם צריך
+        # --- CHAT SECTION ---
+        st.divider()
+        st.subheader("💬 ניתוח תוצאות (AI Analyst)")
+
+        if not HAS_GENAI:
+            st.error("❌ ספריית הצ'אט לא מותקנת בשרת.")
+        elif not api_key:
+            st.info("👈 כדי להפעיל את הצ'אט, יש להגדיר GOOGLE_API_KEY ב-Secrets או להזין אותו בצד.")
+        else:
             if "gemini_chat" not in st.session_state:
                 st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
                 st.session_state.chat_history = []
             
-            # אם החליפו API Key, נאתחל מחדש
-            if "last_api_key" not in st.session_state or st.session_state.last_api_key != api_key:
-                 st.session_state.last_api_key = api_key
-                 st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
-                 st.session_state.chat_history = []
+            # אם מפתח השתנה
+            if "last_key" not in st.session_state or st.session_state.last_key != api_key:
+                st.session_state.last_key = api_key
+                st.session_state.gemini_chat = init_chat_session(best_sched, best_errors, api_key)
+                st.session_state.chat_history = []
 
-            # הצגת היסטוריה
             for msg in st.session_state.chat_history:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-            
-            # קלט משתמש
-            if prompt := st.chat_input("שאל אותי על השיבוץ (למשל: מתי מלמד יוסי? למה קורס X נכשל?)"):
-                # הצגת הודעת משתמש
+                st.chat_message(msg["role"]).write(msg["content"])
+
+            if prompt := st.chat_input("שאל אותי על השיבוץ (למשל: למה קורס X לא שובץ?)"):
                 st.session_state.chat_history.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
+                st.chat_message("user").write(prompt)
                 
-                # קבלת תשובה
                 if st.session_state.gemini_chat:
                     try:
-                        response = st.session_state.gemini_chat.send_message(prompt)
-                        reply = response.text
-                        st.session_state.chat_history.append({"role": "assistant", "content": reply})
-                        with st.chat_message("assistant"):
-                            st.markdown(reply)
-                    except Exception as e:
-                        st.error(f"שגיאה בקבלת תשובה: {e}")
+                        resp = st.session_state.gemini_chat.send_message(prompt)
+                        st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
+                        st.chat_message("assistant").write(resp.text)
+                    except Exception as ex:
+                        st.error(f"שגיאה בצ'אט: {ex}")
 
     except Exception:
         st.error("שגיאה כללית במערכת:")
