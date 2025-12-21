@@ -246,12 +246,4 @@ def run_scheduler(df_courses, lecturer_availability):
         
         hours_list = list(HOURS_RANGE)
         if is_zoom and not fix_h:
-            hours_list.reverse()
-        hours_check = [fix_h] if fix_h else hours_list
-        
-        assigned = False
-        for d in days_check:
-            for h in hours_check:
-                if is_slot_free(lect, year, sem, d, h, duration, is_zoom):
-                    book_slot(lect, year, sem, d, h, duration, course, space)
-                    assigned =
+            hours_list
