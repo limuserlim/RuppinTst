@@ -101,11 +101,15 @@ def preprocess_courses(df):
     if 'Course' in df.columns and 'Lecturer' in df.columns:
         df = df[df['Course'].notna() & df['Lecturer'].notna()]
     
-    # נרמול טקסט בתוכן - קריטי להמיר LinkID למחרוזת כדי למנוע unhashable type dict
-    for col in ['Course', 'Lecturer', 'Space', 'LinkID']:
+    # נרמול טקסט בתוכן
+    for col in ['Course', 'Lecturer', 'Space']:
         if col in df.columns:
-            # המרה אגרסיבית למחרוזת
-            df[col] = df[col].apply(lambda x: str(x).strip() if pd.notna(x) else None)
+            df[col] = df[col].apply(clean_text)
+
+    # === תיקון קריטי לשגיאת unhashable type: 'dict' ===
+    # המרה אגרסיבית של LinkID למחרוזת בלבד
+    if 'LinkID' in df.columns:
+        df['LinkID'] = df['LinkID'].apply(lambda x: str(x).strip() if pd.notna(x) else None)
             
     # המרות טיפוסים
     if 'Duration' in df.columns:
@@ -332,7 +336,7 @@ class SchoolScheduler:
             for _, row in wave_df.iterrows():
                 try:
                     link_id = row['LinkID']
-                    # וידוא ש-link_id הוא Hashable (לא dict/list)
+                    # וידוא ש-link_id הוא מחרוזת פשוטה
                     if isinstance(link_id, (dict, list)):
                         link_id = str(link_id)
 
@@ -369,7 +373,7 @@ class SchoolScheduler:
                                 'Reason': reason,
                                 'LinkID': item.get('LinkID')
                             })
-                except TypeError as e:
+                except Exception as e:
                     # תפיסת שגיאות נקודתיות כדי לא להקריס את הכל
                     print(f"Error processing row: {e}")
                     continue
@@ -380,12 +384,14 @@ class SchoolScheduler:
 # ================= 4. MAIN PROCESS WRAPPER =================
 
 def main_process(courses_file, avail_file, iterations=20):
+    # הסרתי את st.file_uploader כדי למנוע כפילות
     if not courses_file or not avail_file:
+        # הודעה שקטה אם הקבצים טרם הועלו
         st.info("אנא העלה את קבצי הקורסים והזמינות בתפריט למעלה ולחץ על התחל.")
         return
 
     st.write("---")
-    st.info(f"מתחיל בעיבוד נתונים... (מצב Strict Mode)")
+    st.info(f"מתחיל בעיבוד נתונים... (Strict Mode)")
     
     # Load Data
     courses_raw = load_uploaded_file(courses_file)
