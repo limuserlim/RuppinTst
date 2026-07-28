@@ -112,6 +112,22 @@ def update_form_structure(year, semesters):
         })
         current_index += 1
 
+    # 4. שאלה אחרונה - קורסים מבוקשים (רשות, טקסט ארוך)
+    create_requests.append({
+        "createItem": {
+            "item": {
+                "title": "הקורסים שהיית רוצה ללמד בשנה זו",
+                "questionItem": {
+                    "question": {
+                        "required": False, # מוגדר כרשות
+                        "textQuestion": {"paragraph": True} # מוגדר כתיבת טקסט ארוך
+                    }
+                }
+            },
+            "location": {"index": current_index}
+        }
+    })
+
     service.forms().batchUpdate(formId=FORM_ID, body={"requests": create_requests}).execute()
     return True
 
