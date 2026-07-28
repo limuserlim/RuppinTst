@@ -30,7 +30,6 @@ def update_headers_logic(sheet_name, semesters_str):
 
     try:
         with st.spinner(f"⏳ מחפש ומתחבר לגיליון '{sheet_name}'..."):
-            # כאן השינוי המרכזי: פתיחה לפי שם הקובץ במקום URL
             sheet = client.open(sheet_name)
             worksheet = sheet.get_worksheet(0)
 
@@ -51,7 +50,7 @@ def update_headers_logic(sheet_name, semesters_str):
         
         # עדכון
         start_row = 1
-        start_col = 2
+        start_col = 3 # תוקן: מתחיל מעמודה 3 (עמודה C) במקום עמודה B
         worksheet.update(
             range_name=f"{gspread.utils.rowcol_to_a1(start_row, start_col)}", 
             values=[new_headers]
@@ -60,7 +59,6 @@ def update_headers_logic(sheet_name, semesters_str):
         st.success(f"🎉 בוצע בהצלחה! הכותרות עודכנו בגיליון.")
         st.balloons()
 
-    # טיפול ספציפי למקרה שהקובץ לא נמצא או לא שותף
     except gspread.exceptions.SpreadsheetNotFound:
         st.error(f"❌ שגיאה: הקובץ '{sheet_name}' לא נמצא! האם שיתפת אותו עם חשבון השירות (Service Account)?")
     except Exception as e:
@@ -69,10 +67,9 @@ def update_headers_logic(sheet_name, semesters_str):
 # --- הפונקציה הראשית שהתפריט יפעיל ---
 def run():
     st.header("🛠️ עדכון כותרות בגיליון ציונים")
-    st.markdown("כלי זה משנה את שמות העמודות בגיליון (החל מעמודה 2) לפי הסמסטרים המוזנים.")
+    st.markdown("כלי זה משנה את שמות העמודות בגיליון (החל מעמודה C) לפי הסמסטרים המוזנים.")
 
     with st.form("update_form"):
-        # במקום URL, מבקשים את שם הקובץ
         name_input = st.text_input(
             "שם הקובץ ב-Google Drive:",
             value="ROOP", 
