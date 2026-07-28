@@ -39,8 +39,8 @@ def update_headers_logic(sheet_name, semesters_str):
             st.warning("⚠️ לא הוזנו סמסטרים תקינים.")
             return
 
-        # יצירת הכותרות
-        new_headers = []
+        # יצירת הכותרות: מתחילים עם "שם" עבור עמודה B
+        new_headers = ["שם"]
         for sem in semesters:
             for day in range(1, 6):
                 header_name = f"{day}{sem}"
@@ -50,7 +50,7 @@ def update_headers_logic(sheet_name, semesters_str):
         
         # עדכון
         start_row = 1
-        start_col = 3 # תוקן: מתחיל מעמודה 3 (עמודה C) במקום עמודה B
+        start_col = 2 # חזרנו לעמודה 2 (B) כי האיבר הראשון שלנו הוא "שם"
         worksheet.update(
             range_name=f"{gspread.utils.rowcol_to_a1(start_row, start_col)}", 
             values=[new_headers]
@@ -67,7 +67,7 @@ def update_headers_logic(sheet_name, semesters_str):
 # --- הפונקציה הראשית שהתפריט יפעיל ---
 def run():
     st.header("🛠️ עדכון כותרות בגיליון ציונים")
-    st.markdown("כלי זה משנה את שמות העמודות בגיליון (החל מעמודה C) לפי הסמסטרים המוזנים.")
+    st.markdown("כלי זה משנה את שמות העמודות בגיליון (החל מעמודה B) לפי הסמסטרים המוזנים.")
 
     with st.form("update_form"):
         name_input = st.text_input(
