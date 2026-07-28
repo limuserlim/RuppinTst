@@ -24,13 +24,14 @@ def get_gspread_client():
         st.error(f"שגיאה ביצירת הרשאות: {e}")
         return None
 
-def update_headers_logic(sheet_url, semesters_str):
+def update_headers_logic(sheet_name, semesters_str):
     client = get_gspread_client()
     if not client: return
 
     try:
-        with st.spinner("⏳ מתחבר לגיליון בגוגל..."):
-            sheet = client.open_by_url(sheet_url)
+        with st.spinner(f"⏳ מחפש ומתחבר לגיליון '{sheet_name}'..."):
+            # כאן השינוי המרכזי: פתיחה לפי שם הקובץ במקום URL
+            sheet = client.open(sheet_name)
             worksheet = sheet.get_worksheet(0)
 
         semesters = [s.strip() for s in semesters_str.split(',') if s.strip()]
@@ -43,7 +44,6 @@ def update_headers_logic(sheet_url, semesters_str):
         new_headers = []
         for sem in semesters:
             for day in range(1, 6):
-                # הפורמט: 1 [2]
                 header_name = f"{day}{sem}"
                 new_headers.append(header_name)
 
@@ -60,8 +60,11 @@ def update_headers_logic(sheet_url, semesters_str):
         st.success(f"🎉 בוצע בהצלחה! הכותרות עודכנו בגיליון.")
         st.balloons()
 
+    # טיפול ספציפי למקרה שהקובץ לא נמצא או לא שותף
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error(f"❌ שגיאה: הקובץ '{sheet_name}' לא נמצא! האם שיתפת אותו עם חשבון השירות (Service Account)?")
     except Exception as e:
-        st.error(f"❌ שגיאה: {e}")
+        st.error(f"❌ שגיאה כללית: {e}")
 
 # --- הפונקציה הראשית שהתפריט יפעיל ---
 def run():
@@ -69,11 +72,11 @@ def run():
     st.markdown("כלי זה משנה את שמות העמודות בגיליון (החל מעמודה 2) לפי הסמסטרים המוזנים.")
 
     with st.form("update_form"):
-        # כאן שמתי את הקישור שלך כברירת מחדל כדי לחסוך לך זמן
-        url_input = st.text_input(
-            "קישור לגיליון (Google Sheet URL):",
-            value="https://docs.google.com/spreadsheets/d/1ogjseuZBeJ4ukYA6Xi6NjLNlUri5alAe0RufpDix6ic/edit?gid=1468782916#gid=1468782916", # <-- החליפי בקישור האמיתי שלך
-            placeholder="..."
+        # במקום URL, מבקשים את שם הקובץ
+        name_input = st.text_input(
+            "שם הקובץ ב-Google Drive:",
+            value="ROOP", 
+            placeholder="למשל: ROOP"
         )
         
         semesters_input = st.text_input("סמסטרים (מופרדים בפסיק):", value="2,3")
@@ -81,7 +84,7 @@ def run():
         submitted = st.form_submit_button("הרץ עדכון 🚀")
 
     if submitted:
-        if not url_input:
-            st.error("חסר קישור.")
+        if not name_input:
+            st.error("חסר שם קובץ.")
         else:
-            update_headers_logic(url_input, semesters_input)
+            update_headers_logic(name_input, semesters_input)
